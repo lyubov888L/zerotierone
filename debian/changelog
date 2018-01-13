@@ -1,3 +1,9 @@
+zerotier-one (1.2.4-nt1) unstable; urgency=medium
+
+  * Imported Upstream version 1.2.4
+
+ -- didyouexpectthat <github@didyouexpect.us>  Fri, 12 Jan 2018 18:26:28 -0800
+
 zerotier-one (1.1.14-nt3) unstable; urgency=medium
 
   * Clean up authtoken CGI
