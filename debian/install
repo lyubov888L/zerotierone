@@ -4,7 +4,3 @@ debian/readynas/logo.png apps/nastools-zerotier-one
 debian/readynas/https.conf apps/nastools-zerotier-one
 debian/readynas/authtoken apps/nastools-zerotier-one/cgi
 zerotier-one apps/nastools-zerotier-one/sbin
-ext/installfiles/mac/ui/*.html apps/nastools-zerotier-one/var/ui
-ext/installfiles/mac/ui/*.js apps/nastools-zerotier-one/var/ui
-ext/installfiles/mac/ui/*.css apps/nastools-zerotier-one/var/ui
-ext/installfiles/mac/ui/*.jsx apps/nastools-zerotier-one/var/ui
