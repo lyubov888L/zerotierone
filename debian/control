@@ -1,11 +1,11 @@
 Source: zerotier-one
-Maintainer: NAStools <dev@nas.tools>
+Maintainer: NAStools <github@didyouexpect.us>
 Section: net
 Priority: optional
 Standards-Version: 3.9.6
 Build-Depends: debhelper (>= 9), liblz4-dev, libnatpmp-dev, ruby-ronn, dh-systemd
-Vcs-Git: git://github.com/nastools/zerotierone
-Vcs-Browser: https://github.com/nastools/zerotierone
+Vcs-Git: git://github.com/didyouexpectthat/zerotierone
+Vcs-Browser: https://github.com/didyouexpectthat/zerotierone
 Homepage: https://www.zerotier.com
 
 Package: nastools-zerotier-one
