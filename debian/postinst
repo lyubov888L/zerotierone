@@ -6,4 +6,9 @@ case "$1" in
       ;;
 esac
 
+# avahi explicitly doesn't broadcast over ZeroTier
+# so tell avahi to change the config
+# avahi already reloads config on file change
+sed -i 's/,zt0//' /etc/avahi/avahi-daemon.conf
+
 #DEBHELPER#
