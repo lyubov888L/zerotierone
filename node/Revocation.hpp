@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_REVOCATION_HPP
@@ -50,9 +58,17 @@ class Revocation : public Credential
 public:
 	static inline Credential::Type credentialType() { return Credential::CREDENTIAL_TYPE_REVOCATION; }
 
-	Revocation()
+	Revocation() :
+		_id(0),
+		_credentialId(0),
+		_networkId(0),
+		_threshold(0),
+		_flags(0),
+		_target(),
+		_signedBy(),
+		_type(Credential::CREDENTIAL_TYPE_NULL)
 	{
-		memset(this,0,sizeof(Revocation));
+		memset(_signature.data,0,sizeof(_signature.data));
 	}
 
 	/**
@@ -72,12 +88,15 @@ public:
 		_flags(fl),
 		_target(tgt),
 		_signedBy(),
-		_type(ct) {}
+		_type(ct)
+	{
+		memset(_signature.data,0,sizeof(_signature.data));
+	}
 
 	inline uint32_t id() const { return _id; }
 	inline uint32_t credentialId() const { return _credentialId; }
 	inline uint64_t networkId() const { return _networkId; }
-	inline uint64_t threshold() const { return _threshold; }
+	inline int64_t threshold() const { return _threshold; }
 	inline const Address &target() const { return _target; }
 	inline const Address &signer() const { return _signedBy; }
 	inline Credential::Type type() const { return _type; }
@@ -140,7 +159,7 @@ public:
 	template<unsigned int C>
 	inline unsigned int deserialize(const Buffer<C> &b,unsigned int startAt = 0)
 	{
-		memset(this,0,sizeof(Revocation));
+		*this = Revocation();
 
 		unsigned int p = startAt;
 
@@ -160,14 +179,14 @@ public:
 				p += 2;
 				memcpy(_signature.data,b.field(p,ZT_C25519_SIGNATURE_LEN),ZT_C25519_SIGNATURE_LEN);
 				p += ZT_C25519_SIGNATURE_LEN;
-			} else throw std::runtime_error("invalid signature");
+			} else throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_INVALID_CRYPTOGRAPHIC_TOKEN;
 		} else {
 			p += 2 + b.template at<uint16_t>(p);
 		}
 
 		p += 2 + b.template at<uint16_t>(p);
 		if (p > b.size())
-			throw std::runtime_error("extended field overflow");
+			throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_OVERFLOW;
 
 		return (p - startAt);
 	}
@@ -176,7 +195,7 @@ private:
 	uint32_t _id;
 	uint32_t _credentialId;
 	uint64_t _networkId;
-	uint64_t _threshold;
+	int64_t _threshold;
 	uint64_t _flags;
 	Address _target;
 	Address _signedBy;

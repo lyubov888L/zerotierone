@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_CERTIFICATEOFOWNERSHIP_HPP
@@ -61,21 +69,20 @@ public:
 
 	CertificateOfOwnership()
 	{
-		memset(this,0,sizeof(CertificateOfOwnership));
+		memset(reinterpret_cast<void *>(this),0,sizeof(CertificateOfOwnership));
 	}
 
-	CertificateOfOwnership(const uint64_t nwid,const uint64_t ts,const Address &issuedTo,const uint32_t id) :
-		_networkId(nwid),
-		_ts(ts),
-		_flags(0),
-		_id(id),
-		_thingCount(0),
-		_issuedTo(issuedTo)
+	CertificateOfOwnership(const uint64_t nwid,const int64_t ts,const Address &issuedTo,const uint32_t id)
 	{
+		memset(reinterpret_cast<void *>(this),0,sizeof(CertificateOfOwnership));
+		_networkId = nwid;
+		_ts = ts;
+		_id = id;
+		_issuedTo = issuedTo;
 	}
 
 	inline uint64_t networkId() const { return _networkId; }
-	inline uint64_t timestamp() const { return _ts; }
+	inline int64_t timestamp() const { return _ts; }
 	inline uint32_t id() const { return _id; }
 	inline unsigned int thingCount() const { return (unsigned int)_thingCount; }
 
@@ -178,7 +185,7 @@ public:
 	{
 		unsigned int p = startAt;
 
-		memset(this,0,sizeof(CertificateOfOwnership));
+		*this = CertificateOfOwnership();
 
 		_networkId = b.template at<uint64_t>(p); p += 8;
 		_ts = b.template at<uint64_t>(p); p += 8;
@@ -197,7 +204,7 @@ public:
 		_signedBy.setTo(b.field(p,ZT_ADDRESS_LENGTH),ZT_ADDRESS_LENGTH); p += ZT_ADDRESS_LENGTH;
 		if (b[p++] == 1) {
 			if (b.template at<uint16_t>(p) != ZT_C25519_SIGNATURE_LEN)
-				throw std::runtime_error("invalid signature length");
+				throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_INVALID_CRYPTOGRAPHIC_TOKEN;
 			p += 2;
 			memcpy(_signature.data,b.field(p,ZT_C25519_SIGNATURE_LEN),ZT_C25519_SIGNATURE_LEN); p += ZT_C25519_SIGNATURE_LEN;
 		} else {
@@ -206,7 +213,7 @@ public:
 
 		p += 2 + b.template at<uint16_t>(p);
 		if (p > b.size())
-			throw std::runtime_error("extended field overflow");
+			throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_OVERFLOW;
 
 		return (p - startAt);
 	}
@@ -221,7 +228,7 @@ private:
 	bool _owns(const Thing &t,const void *v,unsigned int l) const;
 
 	uint64_t _networkId;
-	uint64_t _ts;
+	int64_t _ts;
 	uint64_t _flags;
 	uint32_t _id;
 	uint16_t _thingCount;

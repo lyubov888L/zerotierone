@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -44,6 +45,7 @@ namespace WinUI
 
         private ObservableCollection<MenuItem> _networkCollection = new ObservableCollection<MenuItem>();
 
+
         public ObservableCollection<MenuItem> NetworkCollection
         {
             get { return _networkCollection; }
@@ -79,13 +81,13 @@ namespace WinUI
         {
             if (networks != null)
             {
-                this.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
+                Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
                 {
                     NetworkCollection.Clear();
                     foreach (ZeroTierNetwork n in networks)
                     {
                         MenuItem item = new MenuItem();
-                        item.Header = n.Title;
+                        item.Header = n.Title.Replace("_", "__");
                         item.DataContext = n;
                         item.IsChecked = n.IsConnected;
                         item.Click += ToolbarItem_NetworkClicked;
@@ -105,13 +107,34 @@ namespace WinUI
                     nodeIdMenuItem.Header = "Node ID: " + status.Address;
                     nodeIdMenuItem.IsEnabled = true;
                     nodeId = status.Address;
+
+                    if (CentralAPI.Instance.HasAccessToken())
+                    {
+                        newNetworkItem.IsEnabled = true;
+                    }
+                    else
+                    {
+                        newNetworkItem.IsEnabled = false;
+                    }
                 }));
             }
         }
 
         private void ToolbarItem_NodeIDClicked(object sender, System.Windows.RoutedEventArgs e)
         {
-            Clipboard.SetText(nodeId);
+            try
+            {
+		            Clipboard.SetDataObject(nodeId);
+            }
+            catch (ArgumentNullException)
+            {
+                // tried to copy a null nodeId
+                Console.WriteLine("ArgumentNullException");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
+            }
         }
 
         private void ToolbarItem_ShowNetworksClicked(object sender, System.Windows.RoutedEventArgs e)
@@ -180,6 +203,11 @@ namespace WinUI
         private void JoinNetworkClosed(object sender, System.EventArgs e)
         {
             joinNetView = null;
+        }
+
+        private void ToolbarItem_CentralClicked(object sender, System.EventArgs e)
+        {
+            Process.Start("https://my.zerotier.com");
         }
 
         private void ToolbarItem_AboutClicked(object sender, System.EventArgs e)
@@ -255,7 +283,7 @@ namespace WinUI
         private void ToolbarItem_QuitClicked(object sender, System.EventArgs e)
         {
             NetworkMonitor.Instance.StopMonitor();
-            this.Close();
+            Close();
             Application.Current.Shutdown();
         }
 
@@ -269,13 +297,28 @@ namespace WinUI
                     ZeroTierNetwork network = item.DataContext as ZeroTierNetwork;
                     if (item.IsChecked)
                     {
-                        APIHandler.Instance.LeaveNetwork(network.NetworkId);
+                        APIHandler.Instance.LeaveNetwork(Dispatcher, network.NetworkId);
                     }
                     else
                     {
-                        APIHandler.Instance.JoinNetwork(network.NetworkId, network.AllowManaged, network.AllowGlobal, network.AllowDefault);
+                        APIHandler.Instance.JoinNetwork(Dispatcher, network.NetworkId, network.AllowManaged, network.AllowGlobal, network.AllowDefault);
                     }
                 }   
+            }
+        }
+
+        private async void ToolbarItem_NewNetwork(object sender, System.Windows.RoutedEventArgs e)
+        {
+            if (CentralAPI.Instance.HasAccessToken())
+            {
+                CentralAPI api = CentralAPI.Instance;
+                CentralNetwork newNetwork = await api.CreateNewNetwork();
+
+                APIHandler handler = APIHandler.Instance;
+                handler.JoinNetwork(this.Dispatcher, newNetwork.Id);
+
+                string nodeId = APIHandler.Instance.NodeAddress();
+                bool authorized = await CentralAPI.Instance.AuthorizeNode(nodeId, newNetwork.Id);
             }
         }
 

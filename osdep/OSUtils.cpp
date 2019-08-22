@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #include <stdio.h>
@@ -21,6 +29,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <sys/stat.h>
+#include <stdlib.h>
 
 #include "../node/Constants.hpp"
 #include "../node/Utils.hpp"
@@ -48,6 +57,23 @@
 #include "OSUtils.hpp"
 
 namespace ZeroTier {
+
+unsigned int OSUtils::ztsnprintf(char *buf,unsigned int len,const char *fmt,...)
+{
+	va_list ap;
+
+	va_start(ap,fmt);
+	int n = (int)vsnprintf(buf,len,fmt,ap);
+	va_end(ap);
+
+	if ((n >= (int)len)||(n < 0)) {
+		if (len)
+			buf[len - 1] = (char)0;
+		throw std::length_error("buf[] overflow");
+	}
+
+	return (unsigned int)n;
+}
 
 #ifdef __UNIX_LIKE__
 bool OSUtils::redirectUnixOutputs(const char *stdoutPath,const char *stderrPath)
@@ -108,7 +134,7 @@ std::vector<std::string> OSUtils::listDirectory(const char *path,bool includeDir
 	return r;
 }
 
-long OSUtils::cleanDirectory(const char *path,const uint64_t olderThan)
+long OSUtils::cleanDirectory(const char *path,const int64_t olderThan)
 {
 	long cleaned = 0;
 
@@ -125,8 +151,8 @@ long OSUtils::cleanDirectory(const char *path,const uint64_t olderThan)
 					date.LowPart = ffd.ftLastWriteTime.dwLowDateTime;
 					if (date.QuadPart > 0) {
 							date.QuadPart -= adjust.QuadPart;
-							if ((uint64_t)((date.QuadPart / 10000000) * 1000) < olderThan) {
-									Utils::snprintf(tmp, sizeof(tmp), "%s\\%s", path, ffd.cFileName);
+							if ((int64_t)((date.QuadPart / 10000000) * 1000) < olderThan) {
+									ztsnprintf(tmp, sizeof(tmp), "%s\\%s", path, ffd.cFileName);
 									if (DeleteFileA(tmp))
 											++cleaned;
 							}
@@ -149,9 +175,9 @@ long OSUtils::cleanDirectory(const char *path,const uint64_t olderThan)
 			break;
 		if (dptr) {
 			if ((strcmp(dptr->d_name,"."))&&(strcmp(dptr->d_name,".."))&&(dptr->d_type == DT_REG)) {
-				Utils::snprintf(tmp,sizeof(tmp),"%s/%s",path,dptr->d_name);
+				ztsnprintf(tmp,sizeof(tmp),"%s/%s",path,dptr->d_name);
 				if (stat(tmp,&st) == 0) {
-					uint64_t mt = (uint64_t)(st.st_mtime);
+					int64_t mt = (int64_t)(st.st_mtime);
 					if ((mt > 0)&&((mt * 1000) < olderThan)) {
 						if (unlink(tmp) == 0)
 							++cleaned;
@@ -279,7 +305,7 @@ int64_t OSUtils::getFileSize(const char *path)
 
 bool OSUtils::readFile(const char *path,std::string &buf)
 {
-	char tmp[1024];
+	char tmp[16384];
 	FILE *f = fopen(path,"rb");
 	if (f) {
 		for(;;) {
@@ -341,7 +367,7 @@ std::vector<std::string> OSUtils::split(const char *s,const char *const sep,cons
 				if (buf.size() > 0) {
 					fields.push_back(buf);
 					buf.clear();
-				} // else skip runs of seperators
+				} // else skip runs of separators
 			} else buf.push_back(*s);
 		}
 		++s;
@@ -355,6 +381,39 @@ std::vector<std::string> OSUtils::split(const char *s,const char *const sep,cons
 
 std::string OSUtils::platformDefaultHomePath()
 {
+#ifdef __QNAP__
+	char *cmd = "/sbin/getcfg zerotier Install_Path -f /etc/config/qpkg.conf";
+    char buf[128];
+    FILE *fp;
+    if ((fp = popen(cmd, "r")) == NULL) {
+        printf("Error opening pipe!\n");
+        return NULL;
+    }
+    while (fgets(buf, 128, fp) != NULL) { }
+    if(pclose(fp))  {
+        printf("Command not found or exited with error status\n");
+        return NULL;
+    }
+    std::string homeDir = std::string(buf);
+    homeDir.erase(std::remove(homeDir.begin(), homeDir.end(), '\n'), homeDir.end());
+    return homeDir;
+#endif
+
+    // Check for user-defined environment variable before using defaults
+#ifdef __WINDOWS__
+	DWORD bufferSize = 65535;
+	std::string userDefinedPath;
+	bufferSize = GetEnvironmentVariable("ZEROTIER_HOME", &userDefinedPath[0], bufferSize);
+	if (bufferSize) {
+		return userDefinedPath;
+	}
+#else
+	if(const char* userDefinedPath = getenv("ZEROTIER_HOME")) {
+		return std::string(userDefinedPath);
+	}
+#endif
+
+	// Finally, resort to using default paths if no user-defined path was provided
 #ifdef __UNIX_LIKE__
 
 #ifdef __APPLE__
@@ -389,9 +448,10 @@ std::string OSUtils::platformDefaultHomePath()
 #endif // __UNIX_LIKE__ or not...
 }
 
+#ifndef OMIT_JSON_SUPPORT
 // Inline these massive JSON operations in one place only to reduce binary footprint and compile time
 nlohmann::json OSUtils::jsonParse(const std::string &buf) { return nlohmann::json::parse(buf.c_str()); }
-std::string OSUtils::jsonDump(const nlohmann::json &j) { return j.dump(1); }
+std::string OSUtils::jsonDump(const nlohmann::json &j,int indentation) { return j.dump(indentation); }
 
 uint64_t OSUtils::jsonInt(const nlohmann::json &jv,const uint64_t dfl)
 {
@@ -401,6 +461,21 @@ uint64_t OSUtils::jsonInt(const nlohmann::json &jv,const uint64_t dfl)
 		} else if (jv.is_string()) {
 			std::string s = jv;
 			return Utils::strToU64(s.c_str());
+		} else if (jv.is_boolean()) {
+			return ((bool)jv ? 1ULL : 0ULL);
+		}
+	} catch ( ... ) {}
+	return dfl;
+}
+
+uint64_t OSUtils::jsonIntHex(const nlohmann::json &jv,const uint64_t dfl)
+{
+	try {
+		if (jv.is_number()) {
+			return (uint64_t)jv;
+		} else if (jv.is_string()) {
+			std::string s = jv;
+			return Utils::hexStrToU64(s.c_str());
 		} else if (jv.is_boolean()) {
 			return ((bool)jv ? 1ULL : 0ULL);
 		}
@@ -438,7 +513,7 @@ std::string OSUtils::jsonString(const nlohmann::json &jv,const char *dfl)
 			return jv;
 		} else if (jv.is_number()) {
 			char tmp[64];
-			Utils::snprintf(tmp,sizeof(tmp),"%llu",(uint64_t)jv);
+			ztsnprintf(tmp,sizeof(tmp),"%llu",(uint64_t)jv);
 			return tmp;
 		} else if (jv.is_boolean()) {
 			return ((bool)jv ? std::string("1") : std::string("0"));
@@ -451,9 +526,10 @@ std::string OSUtils::jsonBinFromHex(const nlohmann::json &jv)
 {
 	std::string s(jsonString(jv,""));
 	if (s.length() > 0) {
-		char *buf = new char[(s.length() / 2) + 1];
+		unsigned int buflen = (unsigned int)((s.length() / 2) + 1);
+		char *buf = new char[buflen];
 		try {
-			unsigned int l = Utils::unhex(s,buf,(unsigned int)s.length());
+			unsigned int l = Utils::unhex(s.c_str(),buf,buflen);
 			std::string b(buf,l);
 			delete [] buf;
 			return b;
@@ -463,6 +539,8 @@ std::string OSUtils::jsonBinFromHex(const nlohmann::json &jv)
 	}
 	return std::string();
 }
+
+#endif // OMIT_JSON_SUPPORT
 
 // Used to convert HTTP header names to ASCII lower case
 const unsigned char OSUtils::TOLOWER_TABLE[256] = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, ' ', '!', '"', '#', '$', '%', '&', 0x27, '(', ')', '*', '+', ',', '-', '.', '/', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', ';', '<', '=', '>', '?', '@', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '{', '|', '}', '~', '_', '`', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '{', '|', '}', '~', 0x7f, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf, 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xbb, 0xbc, 0xbd, 0xbe, 0xbf, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf, 0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xdb, 0xdc, 0xdd, 0xde, 0xdf, 0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xee, 0xef, 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff };

@@ -5,7 +5,7 @@ This is the actual implementation of ZeroTier One, a service providing connectiv
 
 ### Local Configuration File
 
-A file called `local.conf` in the ZeroTier home folder contains configuration options that apply to the local node. It can be used to set up trusted paths, blacklist physical paths, set up physical path hints for certain nodes, and define trusted upstream devices (federated roots). In a large deployment it can be deployed using a tool like Puppet, Chef, SaltStack, etc. to set a uniform configuration across systems. It's a JSON format file that can also be edited and rewritten by ZeroTier One itself, so ensure that proper JSON formatting is used.
+A file called `local.conf` in the ZeroTier home folder contains configuration options that apply to the local node. (It does not exist unless you create it). It can be used to set up trusted paths, blacklist physical paths, set up physical path hints for certain nodes, and define trusted upstream devices (federated roots). In a large deployment it can be deployed using a tool like Puppet, Chef, SaltStack, etc. to set a uniform configuration across systems. It's a JSON format file that can also be edited and rewritten by ZeroTier One itself, so ensure that proper JSON formatting is used. 
 
 Settings available in `local.conf` (this is not valid JSON, and JSON does not allow comments):
 
@@ -14,7 +14,8 @@ Settings available in `local.conf` (this is not valid JSON, and JSON does not al
 	"physical": { /* Settings that apply to physical L2/L3 network paths. */
 		"NETWORK/bits": { /* Network e.g. 10.0.0.0/24 or fd00::/32 */
 			"blacklist": true|false, /* If true, blacklist this path for all ZeroTier traffic */
-			"trustedPathId": 0|!0 /* If present and nonzero, define this as a trusted path (see below) */
+			"trustedPathId": 0|!0, /* If present and nonzero, define this as a trusted path (see below) */
+			"mtu": 0|!0 /* if present and non-zero, set UDP maximum payload MTU for this path */
 		} /* ,... additional networks */
 	},
 	"virtual": { /* Settings applied to ZeroTier virtual network devices (VL1) */
@@ -24,19 +25,23 @@ Settings available in `local.conf` (this is not valid JSON, and JSON does not al
 		}
 	},
 	"settings": { /* Other global settings */
-		"primaryPort": 0-65535, /* If set, override default port of 9993 and any command line port */
+		"primaryPort": 1-65535, /* If set, override default port of 9993 and any command line port */
+		"secondaryPort": 1-65535, /* If set, override default random secondary port */
+		"tertiaryPort": 1-65535, /* If set, override default random tertiary port */
 		"portMappingEnabled": true|false, /* If true (the default), try to use uPnP or NAT-PMP to map ports */
 		"softwareUpdate": "apply"|"download"|"disable", /* Automatically apply updates, just download, or disable built-in software updates */
 		"softwareUpdateChannel": "release"|"beta", /* Software update channel */
 		"softwareUpdateDist": true|false, /* If true, distribute software updates (only really useful to ZeroTier, Inc. itself, default is false) */
 		"interfacePrefixBlacklist": [ "XXX",... ], /* Array of interface name prefixes (e.g. eth for eth#) to blacklist for ZT traffic */
-		"allowManagementFrom": "NETWORK/bits"|null /* If non-NULL, allow JSON/HTTP management from this IP network. Default is 127.0.0.1 only. */
+		"allowManagementFrom": [ "NETWORK/bits", ...] |null, /* If non-NULL, allow JSON/HTTP management from this IP network. Default is 127.0.0.1 only. */
+		"bind": [ "ip",... ], /* If present and non-null, bind to these IPs instead of to each interface (wildcard IP allowed) */
+		"allowTcpFallbackRelay": true|false, /* Allow or disallow establishment of TCP relay connections (true by default) */
+		"multipathMode": 0|1|2 /* multipath mode: none (0), random (1), proportional (2) */
 	}
 }
 ```
 
  * **trustedPathId**: A trusted path is a physical network over which encryption and authentication are not required. This provides a performance boost but sacrifices all ZeroTier's security features when communicating over this path. Only use this if you know what you are doing and really need the performance! To set up a trusted path, all devices using it *MUST* have the *same trusted path ID* for the same network. Trusted path IDs are arbitrary positive non-zero integers. For example a group of devices on a LAN with IPs in 10.0.0.0/24 could use it as a fast trusted path if they all had the same trusted path ID of "25" defined for that network.
- * **relayPolicy**: Under what circumstances should this device relay traffic for other devices? The default is TRUSTED, meaning that we'll only relay for devices we know to be members of a network we have joined. NEVER is the default on mobile devices (iOS/Android) and tells us to never relay traffic. ALWAYS is usually only set for upstreams and roots, allowing them to act as promiscuous relays for anyone who desires it.
 
 An example `local.conf`:
 
@@ -59,7 +64,7 @@ An example `local.conf`:
 	},
 	"settings": {
 		"softwareUpdate": "apply",
-		"softwraeUpdateChannel": "release"
+		"softwareUpdateChannel": "release"
 	}
 }
 ```
@@ -165,7 +170,7 @@ Getting /peer returns an array of peer objects for all current peers. See below 
 | versionRev            | integer       | Software revision of remote (if known)            | no       |
 | version               | string        | major.minor.revision                              | no       |
 | latency               | integer       | Latency in milliseconds if known                  | no       |
-| role                  | string        | LEAF, UPSTREAM, or ROOT                           | no       |
+| role                  | string        | LEAF, UPSTREAM, ROOT or PLANET                    | no       |
 | paths                 | [object]      | Currently active physical paths (see below)       | no       |
 
 Path objects:

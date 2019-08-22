@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #include <stdio.h>
@@ -50,8 +58,10 @@
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#ifndef ZT_NO_CAPABILITIES
 #include <linux/capability.h>
 #include <linux/securebits.h>
+#endif
 #endif
 #endif
 
@@ -59,6 +69,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <sstream>
+#include <algorithm>
 
 #include "version.h"
 #include "include/ZeroTierOne.h"
@@ -85,7 +96,7 @@ using namespace ZeroTier;
 static OneService *volatile zt1Service = (OneService *)0;
 
 #define PROGRAM_NAME "ZeroTier One"
-#define COPYRIGHT_NOTICE "Copyright (c) 2011-2017 ZeroTier, Inc."
+#define COPYRIGHT_NOTICE "Copyright (c) 2011-2018 ZeroTier, Inc."
 #define LICENSE_GRANT \
 	"This is free software: you may copy, modify, and/or distribute this" ZT_EOL_S \
 	"work under the terms of the GNU General Public License, version 3 or" ZT_EOL_S \
@@ -119,13 +130,21 @@ static void cliPrintHelp(const char *pn,FILE *out)
 	fprintf(out,ZT_EOL_S"Available commands:" ZT_EOL_S);
 	fprintf(out,"  info                    - Display status info" ZT_EOL_S);
 	fprintf(out,"  listpeers               - List all peers" ZT_EOL_S);
+	fprintf(out,"  peers                   - List all peers (prettier)" ZT_EOL_S);
 	fprintf(out,"  listnetworks            - List all networks" ZT_EOL_S);
 	fprintf(out,"  join <network>          - Join a network" ZT_EOL_S);
 	fprintf(out,"  leave <network>         - Leave a network" ZT_EOL_S);
 	fprintf(out,"  set <network> <setting> - Set a network setting" ZT_EOL_S);
+	fprintf(out,"  get <network> <setting> - Get a network setting" ZT_EOL_S);
 	fprintf(out,"  listmoons               - List moons (federated root sets)" ZT_EOL_S);
 	fprintf(out,"  orbit <world ID> <seed> - Join a moon via any member root" ZT_EOL_S);
 	fprintf(out,"  deorbit <world ID>      - Leave a moon" ZT_EOL_S);
+	fprintf(out,ZT_EOL_S"Available settings:" ZT_EOL_S);
+	fprintf(out,"  Settings to use with [get/set] may include property names from " ZT_EOL_S);
+	fprintf(out,"  the JSON output of \"zerotier-cli -j listnetworks\". Additionally, " ZT_EOL_S);
+	fprintf(out,"  (ip, ip4, ip6, ip6plane, and ip6prefix can be used). For instance:" ZT_EOL_S);
+	fprintf(out,"  zerotier-cli get <nwid> ip6plane will return the 6PLANE address" ZT_EOL_S);
+	fprintf(out,"  assigned to this node." ZT_EOL_S);
 }
 
 static std::string cliFixJsonCRs(const std::string &s)
@@ -252,9 +271,9 @@ static int cli(int argc,char **argv)
 				if (hd) {
 					char p[4096];
 #ifdef __APPLE__
-					Utils::snprintf(p,sizeof(p),"%s/Library/Application Support/ZeroTier/One/authtoken.secret",hd);
+					OSUtils::ztsnprintf(p,sizeof(p),"%s/Library/Application Support/ZeroTier/One/authtoken.secret",hd);
 #else
-					Utils::snprintf(p,sizeof(p),"%s/.zeroTierOneAuthToken",hd);
+					OSUtils::ztsnprintf(p,sizeof(p),"%s/.zeroTierOneAuthToken",hd);
 #endif
 					OSUtils::readFile(p,authToken);
 				}
@@ -270,7 +289,7 @@ static int cli(int argc,char **argv)
 	InetAddress addr;
 	{
 		char addrtmp[256];
-		Utils::snprintf(addrtmp,sizeof(addrtmp),"%s/%u",ip.c_str(),port);
+		OSUtils::ztsnprintf(addrtmp,sizeof(addrtmp),"%s/%u",ip.c_str(),port);
 		addr = InetAddress(addrtmp);
 	}
 
@@ -290,7 +309,7 @@ static int cli(int argc,char **argv)
 			responseHeaders,
 			responseBody);
 		if (scode == 200) {
-			printf("%s",cliFixJsonCRs(responseBody).c_str());
+			printf("%s", cliFixJsonCRs(responseBody).c_str());
 			return 0;
 		} else {
 			printf("%u %s %s" ZT_EOL_S,scode,command.c_str(),responseBody.c_str());
@@ -298,6 +317,11 @@ static int cli(int argc,char **argv)
 		}
 	} else if ((command == "info")||(command == "status")) {
 		const unsigned int scode = Http::GET(1024 * 1024 * 16,60000,(const struct sockaddr *)&addr,"/status",requestHeaders,responseHeaders,responseBody);
+
+		if (scode == 0) {
+			printf("Error connecting to the ZeroTier service: %s\n\nPlease check that the service is running and that TCP port 9993 can be contacted via 127.0.0.1." ZT_EOL_S, responseBody.c_str());
+			return 1;
+		}
 
 		nlohmann::json j;
 		try {
@@ -329,6 +353,11 @@ static int cli(int argc,char **argv)
 	} else if (command == "listpeers") {
 		const unsigned int scode = Http::GET(1024 * 1024 * 16,60000,(const struct sockaddr *)&addr,"/peer",requestHeaders,responseHeaders,responseBody);
 
+		if (scode == 0) {
+			printf("Error connecting to the ZeroTier service: %s\n\nPlease check that the service is running and that TCP port 9993 can be contacted via 127.0.0.1." ZT_EOL_S, responseBody.c_str());
+			return 1;
+		}
+
 		nlohmann::json j;
 		try {
 			j = OSUtils::jsonParse(responseBody);
@@ -356,9 +385,8 @@ static int cli(int argc,char **argv)
 								if (path["preferred"]) {
 									char tmp[256];
 									std::string addr = path["address"];
-									const uint64_t now = OSUtils::now();
-									const double lq = (path.count("linkQuality")) ? (double)path["linkQuality"] : -1.0;
-									Utils::snprintf(tmp,sizeof(tmp),"%s;%llu;%llu;%1.2f",addr.c_str(),now - (uint64_t)path["lastSend"],now - (uint64_t)path["lastReceive"],lq);
+									const int64_t now = OSUtils::now();
+									OSUtils::ztsnprintf(tmp,sizeof(tmp),"%s;%lld;%lld",addr.c_str(),now - (int64_t)path["lastSend"],now - (int64_t)path["lastReceive"]);
 									bestPath = tmp;
 									break;
 								}
@@ -370,7 +398,7 @@ static int cli(int argc,char **argv)
 						int64_t vmin = p["versionMinor"];
 						int64_t vrev = p["versionRev"];
 						if (vmaj >= 0) {
-							Utils::snprintf(ver,sizeof(ver),"%lld.%lld.%lld",vmaj,vmin,vrev);
+							OSUtils::ztsnprintf(ver,sizeof(ver),"%lld.%lld.%lld",vmaj,vmin,vrev);
 						} else {
 							ver[0] = '-';
 							ver[1] = (char)0;
@@ -389,8 +417,80 @@ static int cli(int argc,char **argv)
 			printf("%u %s %s" ZT_EOL_S,scode,command.c_str(),responseBody.c_str());
 			return 1;
 		}
+	} else if (command == "peers") {
+		const unsigned int scode = Http::GET(1024 * 1024 * 16,60000,(const struct sockaddr *)&addr,"/peer",requestHeaders,responseHeaders,responseBody);
+
+		if (scode == 0) {
+			printf("Error connecting to the ZeroTier service: %s\n\nPlease check that the service is running and that TCP port 9993 can be contacted via 127.0.0.1." ZT_EOL_S, responseBody.c_str());
+			return 1;
+		}
+
+		nlohmann::json j;
+		try {
+			j = OSUtils::jsonParse(responseBody);
+		} catch (std::exception &exc) {
+			printf("%u %s invalid JSON response (%s)" ZT_EOL_S,scode,command.c_str(),exc.what());
+			return 1;
+		} catch ( ... ) {
+			printf("%u %s invalid JSON response (unknown exception)" ZT_EOL_S,scode,command.c_str());
+			return 1;
+		}
+
+		if (scode == 200) {
+			if (json) {
+				printf("%s" ZT_EOL_S,OSUtils::jsonDump(j).c_str());
+			} else {
+				printf("200 peers\n<ztaddr>   <ver>  <role> <lat> <link> <lastTX> <lastRX> <path>" ZT_EOL_S);
+				if (j.is_array()) {
+					for(unsigned long k=0;k<j.size();++k) {
+						nlohmann::json &p = j[k];
+						std::string bestPath;
+						nlohmann::json &paths = p["paths"];
+						if (paths.is_array()) {
+							for(unsigned long i=0;i<paths.size();++i) {
+								nlohmann::json &path = paths[i];
+								if (path["preferred"]) {
+									char tmp[256];
+									std::string addr = path["address"];
+									const int64_t now = OSUtils::now();
+									OSUtils::ztsnprintf(tmp,sizeof(tmp),"%-8lld %-8lld %s",now - (int64_t)path["lastSend"],now - (int64_t)path["lastReceive"],addr.c_str());
+									bestPath = std::string("DIRECT ") + tmp;
+									break;
+								}
+							}
+						}
+						if (bestPath.length() == 0) bestPath = "RELAY";
+						char ver[128];
+						int64_t vmaj = p["versionMajor"];
+						int64_t vmin = p["versionMinor"];
+						int64_t vrev = p["versionRev"];
+						if (vmaj >= 0) {
+							OSUtils::ztsnprintf(ver,sizeof(ver),"%lld.%lld.%lld",vmaj,vmin,vrev);
+						} else {
+							ver[0] = '-';
+							ver[1] = (char)0;
+						}
+						printf("%s %-6s %-6s %5d %s" ZT_EOL_S,
+							OSUtils::jsonString(p["address"],"-").c_str(),
+							ver,
+							OSUtils::jsonString(p["role"],"-").c_str(),
+							(int)OSUtils::jsonInt(p["latency"],0),
+							bestPath.c_str());
+					}
+				}
+			}
+			return 0;
+		} else {
+			printf("%u %s %s" ZT_EOL_S,scode,command.c_str(),responseBody.c_str());
+			return 1;
+		}
 	} else if (command == "listnetworks") {
 		const unsigned int scode = Http::GET(1024 * 1024 * 16,60000,(const struct sockaddr *)&addr,"/network",requestHeaders,responseHeaders,responseBody);
+
+		if (scode == 0) {
+			printf("Error connecting to the ZeroTier service: %s\n\nPlease check that the service is running and that TCP port 9993 can be contacted via 127.0.0.1." ZT_EOL_S, responseBody.c_str());
+			return 1;
+		}
 
 		nlohmann::json j;
 		try {
@@ -443,7 +543,7 @@ static int cli(int argc,char **argv)
 		}
 	} else if (command == "join") {
 		if (arg1.length() != 16) {
-			cliPrintHelp(argv[0],stderr);
+			printf("invalid network id" ZT_EOL_S);
 			return 2;
 		}
 		requestHeaders["Content-Type"] = "application/json";
@@ -471,7 +571,7 @@ static int cli(int argc,char **argv)
 		}
 	} else if (command == "leave") {
 		if (arg1.length() != 16) {
-			cliPrintHelp(argv[0],stderr);
+			printf("invalid network id" ZT_EOL_S);
 			return 2;
 		}
 		unsigned int scode = Http::DEL(
@@ -496,6 +596,11 @@ static int cli(int argc,char **argv)
 	} else if (command == "listmoons") {
 		const unsigned int scode = Http::GET(1024 * 1024 * 16,60000,(const struct sockaddr *)&addr,"/moon",requestHeaders,responseHeaders,responseBody);
 
+		if (scode == 0) {
+			printf("Error connecting to the ZeroTier service: %s\n\nPlease check that the service is running and that TCP port 9993 can be contacted via 127.0.0.1." ZT_EOL_S, responseBody.c_str());
+			return 1;
+		}
+
 		nlohmann::json j;
 		try {
 			j = OSUtils::jsonParse(responseBody);
@@ -519,9 +624,9 @@ static int cli(int argc,char **argv)
 		const uint64_t seed = Utils::hexStrToU64(arg2.c_str());
 		if ((worldId)&&(seed)) {
 			char jsons[1024];
-			Utils::snprintf(jsons,sizeof(jsons),"{\"seed\":\"%s\"}",arg2.c_str());
+			OSUtils::ztsnprintf(jsons,sizeof(jsons),"{\"seed\":\"%s\"}",arg2.c_str());
 			char cl[128];
-			Utils::snprintf(cl,sizeof(cl),"%u",(unsigned int)strlen(jsons));
+			OSUtils::ztsnprintf(cl,sizeof(cl),"%u",(unsigned int)strlen(jsons));
 			requestHeaders["Content-Type"] = "application/json";
 			requestHeaders["Content-Length"] = cl;
 			unsigned int scode = Http::POST(
@@ -564,18 +669,22 @@ static int cli(int argc,char **argv)
 		}
 	} else if (command == "set") {
 		if (arg1.length() != 16) {
-			cliPrintHelp(argv[0],stderr);
+			fprintf(stderr,"invalid format: must be a 16-digit (network) ID\n");
+			return 2;
+		}
+		if (!arg2.length()) {
+			fprintf(stderr,"invalid format: include a property name to set\n");
 			return 2;
 		}
 		std::size_t eqidx = arg2.find('=');
 		if (eqidx != std::string::npos) {
 			if ((arg2.substr(0,eqidx) == "allowManaged")||(arg2.substr(0,eqidx) == "allowGlobal")||(arg2.substr(0,eqidx) == "allowDefault")) {
 				char jsons[1024];
-				Utils::snprintf(jsons,sizeof(jsons),"{\"%s\":%s}",
+				OSUtils::ztsnprintf(jsons,sizeof(jsons),"{\"%s\":%s}",
 					arg2.substr(0,eqidx).c_str(),
 					(((arg2.substr(eqidx,2) == "=t")||(arg2.substr(eqidx,2) == "=1")) ? "true" : "false"));
 				char cl[128];
-				Utils::snprintf(cl,sizeof(cl),"%u",(unsigned int)strlen(jsons));
+				OSUtils::ztsnprintf(cl,sizeof(cl),"%u",(unsigned int)strlen(jsons));
 				requestHeaders["Content-Type"] = "application/json";
 				requestHeaders["Content-Length"] = cl;
 				unsigned int scode = Http::POST(
@@ -599,6 +708,99 @@ static int cli(int argc,char **argv)
 		} else {
 			cliPrintHelp(argv[0],stderr);
 			return 2;
+		}
+	} else if (command == "get") {
+		if (arg1.length() != 16) {
+			fprintf(stderr,"invalid format: must be a 16-digit (network) ID\n");
+			return 2;
+		}
+		if (!arg2.length()) {
+			fprintf(stderr,"invalid format: include a property name to get\n");
+			return 2;
+		}
+		const unsigned int scode = Http::GET(1024 * 1024 * 16,60000,(const struct sockaddr *)&addr,"/network",requestHeaders,responseHeaders,responseBody);
+		if (scode == 0) {
+			printf("Error connecting to the ZeroTier service: %s\n\nPlease check that the service is running and that TCP port 9993 can be contacted via 127.0.0.1." ZT_EOL_S, responseBody.c_str());
+			return 1;
+		}
+		nlohmann::json j;
+		try {
+			j = OSUtils::jsonParse(responseBody);
+		} catch (std::exception &exc) {
+			printf("%u %s invalid JSON response (%s)" ZT_EOL_S,scode,command.c_str(),exc.what());
+			return 1;
+		} catch ( ... ) {
+			printf("%u %s invalid JSON response (unknown exception)" ZT_EOL_S,scode,command.c_str());
+			return 1;
+		}
+		bool bNetworkFound = false;
+		if (j.is_array()) {
+			for(unsigned long i=0;i<j.size();++i) {
+				nlohmann::json &n = j[i];
+				if (n.is_object()) {
+					if (n["id"] == arg1) {
+						bNetworkFound = true;
+						std::string aa;
+						if (arg2 != "ip" && arg2 != "ip4" && arg2 != "ip6" && arg2 != "ip6plane" && arg2 != "ip6prefix") {
+							aa.append(OSUtils::jsonString(n[arg2],"-")); // Standard network property field
+							if (aa == "-") {
+								printf("error, unknown property name\n");
+								break;
+							}
+							printf("%s\n",aa.c_str());
+							break;
+						}
+						nlohmann::json &assignedAddresses = n["assignedAddresses"];
+						if (assignedAddresses.is_array()) {
+							int matchingIdxs[ZT_MAX_ZT_ASSIGNED_ADDRESSES];
+							int addressCountOfType = 0;
+							for (int k = 0; k<std::min(ZT_MAX_ZT_ASSIGNED_ADDRESSES, (int)assignedAddresses.size());++k) {
+								nlohmann::json &addr = assignedAddresses[k];
+								if ((arg2 == "ip4" && addr.get<std::string>().find(".") != std::string::npos)
+									|| ((arg2.find("ip6") == 0) && addr.get<std::string>().find(":") != std::string::npos)
+									|| (arg2 == "ip")
+									) {
+									matchingIdxs[addressCountOfType++] = k;
+								}
+							}
+							for (int k=0; k<addressCountOfType; k++) {
+								nlohmann::json &addr = assignedAddresses[matchingIdxs[k]];
+								if (!addr.is_string()) {
+									continue;
+								}
+								if (arg2.find("ip6p") == 0) {
+									if (arg2 == "ip6plane") {
+										if (addr.get<std::string>().find("fc") == 0) {
+											aa.append(addr.get<std::string>().substr(0,addr.get<std::string>().find("/")));
+											if (k < addressCountOfType-1) aa.append("\n");
+										}
+									}
+									if (arg2 == "ip6prefix") {
+										if (addr.get<std::string>().find("fc") == 0) {
+											aa.append(addr.get<std::string>().substr(0,addr.get<std::string>().find("/")).substr(0,24));
+											if (k < addressCountOfType-1) aa.append("\n");
+										}
+									}
+								}
+								else {
+									aa.append(addr.get<std::string>().substr(0,addr.get<std::string>().find("/")));
+									if (k < addressCountOfType-1) aa.append("\n");
+								}
+							}
+						}
+						printf("%s\n",aa.c_str());
+					}
+				}
+			}
+		}
+		if (!bNetworkFound) {
+			fprintf(stderr,"unknown network ID, check that you are a member of the network\n");
+		}
+		if (scode == 200) {
+			return 0;
+		} else {
+			printf("%u %s %s" ZT_EOL_S,scode,command.c_str(),responseBody.c_str());
+			return 1;
 		}
 	} else {
 		cliPrintHelp(argv[0],stderr);
@@ -640,7 +842,7 @@ static Identity getIdFromArg(char *arg)
 	} else { // identity is to be read from a file
 		std::string idser;
 		if (OSUtils::readFile(arg,idser)) {
-			if (id.fromString(idser))
+			if (id.fromString(idser.c_str()))
 				return id;
 		}
 	}
@@ -681,14 +883,15 @@ static int idtool(int argc,char **argv)
 			}
 		}
 
-		std::string idser = id.toString(true);
+		char idtmp[1024];
+		std::string idser = id.toString(true,idtmp);
 		if (argc >= 3) {
 			if (!OSUtils::writeFile(argv[2],idser)) {
 				fprintf(stderr,"Error writing to %s" ZT_EOL_S,argv[2]);
 				return 1;
 			} else printf("%s written" ZT_EOL_S,argv[2]);
 			if (argc >= 4) {
-				idser = id.toString(false);
+				idser = id.toString(false,idtmp);
 				if (!OSUtils::writeFile(argv[3],idser)) {
 					fprintf(stderr,"Error writing to %s" ZT_EOL_S,argv[3]);
 					return 1;
@@ -723,7 +926,8 @@ static int idtool(int argc,char **argv)
 			return 1;
 		}
 
-		printf("%s",id.toString(false).c_str());
+		char idtmp[1024];
+		printf("%s",id.toString(false,idtmp));
 	} else if (!strcmp(argv[1],"sign")) {
 		if (argc < 4) {
 			idtoolPrintHelp(stdout,argv[0]);
@@ -747,9 +951,10 @@ static int idtool(int argc,char **argv)
 			return 1;
 		}
 		C25519::Signature signature = id.sign(inf.data(),(unsigned int)inf.length());
-		printf("%s",Utils::hex(signature.data,(unsigned int)signature.size()).c_str());
+		char hexbuf[1024];
+		printf("%s",Utils::hex(signature.data,ZT_C25519_SIGNATURE_LEN,hexbuf));
 	} else if (!strcmp(argv[1],"verify")) {
-		if (argc < 4) {
+		if (argc < 5) {
 			idtoolPrintHelp(stdout,argv[0]);
 			return 1;
 		}
@@ -766,12 +971,24 @@ static int idtool(int argc,char **argv)
 			return 1;
 		}
 
-		std::string signature(Utils::unhex(argv[4]));
+		char buf[4096];
+		std::string signature(buf,Utils::unhex(argv[4],buf,(unsigned int)sizeof(buf)));
 		if ((signature.length() > ZT_ADDRESS_LENGTH)&&(id.verify(inf.data(),(unsigned int)inf.length(),signature.data(),(unsigned int)signature.length()))) {
 			printf("%s signature valid" ZT_EOL_S,argv[3]);
 		} else {
-			fprintf(stderr,"%s signature check FAILED" ZT_EOL_S,argv[3]);
-			return 1;
+			signature.clear();
+			if (OSUtils::readFile(argv[4],signature)) {
+				signature.assign(buf,Utils::unhex(signature.c_str(),buf,(unsigned int)sizeof(buf)));
+				if ((signature.length() > ZT_ADDRESS_LENGTH)&&(id.verify(inf.data(),(unsigned int)inf.length(),signature.data(),(unsigned int)signature.length()))) {
+					printf("%s signature valid" ZT_EOL_S,argv[3]);
+				} else {
+					fprintf(stderr,"%s signature check FAILED" ZT_EOL_S,argv[3]);
+					return 1;
+				}
+			} else {
+				fprintf(stderr,"%s signature check FAILED" ZT_EOL_S,argv[3]);
+				return 1;
+			}
 		}
 	} else if (!strcmp(argv[1],"initmoon")) {
 		if (argc < 3) {
@@ -785,14 +1002,15 @@ static int idtool(int argc,char **argv)
 
 			C25519::Pair kp(C25519::generate());
 
+			char idtmp[4096];
 			nlohmann::json mj;
 			mj["objtype"] = "world";
 			mj["worldType"] = "moon";
-			mj["updatesMustBeSignedBy"] = mj["signingKey"] = Utils::hex(kp.pub.data,(unsigned int)kp.pub.size());
-			mj["signingKey_SECRET"] = Utils::hex(kp.priv.data,(unsigned int)kp.priv.size());
-			mj["id"] = id.address().toString();
+			mj["updatesMustBeSignedBy"] = mj["signingKey"] = Utils::hex(kp.pub.data,ZT_C25519_PUBLIC_KEY_LEN,idtmp);
+			mj["signingKey_SECRET"] = Utils::hex(kp.priv.data,ZT_C25519_PRIVATE_KEY_LEN,idtmp);
+			mj["id"] = id.address().toString(idtmp);
 			nlohmann::json seedj;
-			seedj["identity"] = id.toString(false);
+			seedj["identity"] = id.toString(false,idtmp);
 			seedj["stableEndpoints"] = nlohmann::json::array();
 			(mj["roots"] = nlohmann::json::array()).push_back(seedj);
 			std::string mjd(OSUtils::jsonDump(mj));
@@ -828,9 +1046,9 @@ static int idtool(int argc,char **argv)
 
 			C25519::Pair signingKey;
 			C25519::Public updatesMustBeSignedBy;
-			Utils::unhex(OSUtils::jsonString(mj["signingKey"],""),signingKey.pub.data,(unsigned int)signingKey.pub.size());
-			Utils::unhex(OSUtils::jsonString(mj["signingKey_SECRET"],""),signingKey.priv.data,(unsigned int)signingKey.priv.size());
-			Utils::unhex(OSUtils::jsonString(mj["updatesMustBeSignedBy"],""),updatesMustBeSignedBy.data,(unsigned int)updatesMustBeSignedBy.size());
+			Utils::unhex(OSUtils::jsonString(mj["signingKey"],"").c_str(),signingKey.pub.data,ZT_C25519_PUBLIC_KEY_LEN);
+			Utils::unhex(OSUtils::jsonString(mj["signingKey_SECRET"],"").c_str(),signingKey.priv.data,ZT_C25519_PRIVATE_KEY_LEN);
+			Utils::unhex(OSUtils::jsonString(mj["updatesMustBeSignedBy"],"").c_str(),updatesMustBeSignedBy.data,ZT_C25519_PUBLIC_KEY_LEN);
 
 			std::vector<World::Root> roots;
 			nlohmann::json &rootsj = mj["roots"];
@@ -839,11 +1057,11 @@ static int idtool(int argc,char **argv)
 					nlohmann::json &r = rootsj[i];
 					if (r.is_object()) {
 						roots.push_back(World::Root());
-						roots.back().identity = Identity(OSUtils::jsonString(r["identity"],""));
+						roots.back().identity = Identity(OSUtils::jsonString(r["identity"],"").c_str());
 						nlohmann::json &stableEndpointsj = r["stableEndpoints"];
 						if (stableEndpointsj.is_array()) {
 							for(unsigned long k=0;k<(unsigned long)stableEndpointsj.size();++k)
-								roots.back().stableEndpoints.push_back(InetAddress(OSUtils::jsonString(stableEndpointsj[k],"")));
+								roots.back().stableEndpoints.push_back(InetAddress(OSUtils::jsonString(stableEndpointsj[k],"").c_str()));
 							std::sort(roots.back().stableEndpoints.begin(),roots.back().stableEndpoints.end());
 						}
 					}
@@ -851,12 +1069,12 @@ static int idtool(int argc,char **argv)
 			}
 			std::sort(roots.begin(),roots.end());
 
-			const uint64_t now = OSUtils::now();
+			const int64_t now = OSUtils::now();
 			World w(World::make(t,id,now,updatesMustBeSignedBy,roots,signingKey));
 			Buffer<ZT_WORLD_MAX_SERIALIZED_LENGTH> wbuf;
 			w.serialize(wbuf);
 			char fn[128];
-			Utils::snprintf(fn,sizeof(fn),"%.16llx.moon",w.id());
+			OSUtils::ztsnprintf(fn,sizeof(fn),"%.16llx.moon",w.id());
 			OSUtils::writeFile(fn,wbuf.data(),wbuf.size());
 			printf("wrote %s (signed world with timestamp %llu)" ZT_EOL_S,fn,(unsigned long long)now);
 		}
@@ -886,7 +1104,7 @@ static void _sighandlerQuit(int sig)
 #endif
 
 // Drop privileges on Linux, if supported by libc etc. and "zerotier-one" user exists on system
-#ifdef __LINUX__
+#if defined(__LINUX__) && !defined(ZT_NO_CAPABILITIES)
 #ifndef PR_CAP_AMBIENT
 #define PR_CAP_AMBIENT 47
 #define PR_CAP_AMBIENT_IS_SET 1
@@ -979,7 +1197,7 @@ static void dropPrivileges(const char *procName,const std::string &homeDir)
 	// Change ownership of our home directory if everything looks good (does nothing if already chown'd)
 	_recursiveChown(homeDir.c_str(),targetUser->pw_uid,targetUser->pw_gid);
 
-	if (_setCapabilities((1 << CAP_NET_ADMIN) | (1 << CAP_NET_RAW) | (1 << CAP_SETUID) | (1 << CAP_SETGID)) < 0) {
+	if (_setCapabilities((1 << CAP_NET_ADMIN) | (1 << CAP_NET_RAW) | (1 << CAP_SETUID) | (1 << CAP_SETGID) | (1 << CAP_NET_BIND_SERVICE)) < 0) {
 		_notDropping(procName,homeDir);
 		return;
 	}
@@ -1003,7 +1221,7 @@ static void dropPrivileges(const char *procName,const std::string &homeDir)
 		exit(1);
 	}
 
-	if (_setCapabilities((1 << CAP_NET_ADMIN) | (1 << CAP_NET_RAW)) < 0) {
+	if (_setCapabilities((1 << CAP_NET_ADMIN) | (1 << CAP_NET_RAW) | (1 << CAP_NET_BIND_SERVICE)) < 0) {
 		fprintf(stderr,"%s: FATAL: unable to drop capabilities after relinquishing root" ZT_EOL_S,procName);
 		exit(1);
 	}
@@ -1265,12 +1483,14 @@ int main(int argc,char **argv)
 #ifdef __UNIX_LIKE__
 	signal(SIGHUP,&_sighandlerHup);
 	signal(SIGPIPE,SIG_IGN);
+	signal(SIGIO,SIG_IGN);
 	signal(SIGUSR1,SIG_IGN);
 	signal(SIGUSR2,SIG_IGN);
 	signal(SIGALRM,SIG_IGN);
 	signal(SIGINT,&_sighandlerQuit);
 	signal(SIGTERM,&_sighandlerQuit);
 	signal(SIGQUIT,&_sighandlerQuit);
+	signal(SIGINT,&_sighandlerQuit);
 
 	/* Ensure that there are no inherited file descriptors open from a previous
 	 * incarnation. This is a hack to ensure that GitHub issue #61 or variants
@@ -1338,7 +1558,7 @@ int main(int argc,char **argv)
 					if (argv[i][2]) {
 						printHelp(argv[0],stdout);
 						return 0;
-					} else return idtool(argc,argv);
+					} else return idtool(argc-1,argv+1);
 
 				case 'q': // Invoke cli personality
 					if (argv[i][2]) {
@@ -1480,7 +1700,8 @@ int main(int argc,char **argv)
 
 #ifdef __UNIX_LIKE__
 #ifdef ZT_HAVE_DROP_PRIVILEGES
-	dropPrivileges(argv[0],homeDir);
+	if (!skipRootCheck)
+		dropPrivileges(argv[0],homeDir);
 #endif
 
 	std::string pidPath(homeDir + ZT_PATH_SEPARATOR_S + ZT_PID_PATH);

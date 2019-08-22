@@ -1,16 +1,17 @@
-<<<<<<< HEAD
 # Main binaries created in *nix builds
 /zerotier-one
 /zerotier-idtool
 /zerotier-cli
 /zerotier-selftest
 /zerotier
+/nltest
 
 # OS-created garbage files from various platforms
 .DS_Store
 .Apple*
 Thumbs.db
 @eaDir
+._*
 
 # Windows build droppings
 /windows/ZeroTierOne.sdf
@@ -27,6 +28,7 @@ Thumbs.db
 /windows/Release
 /windows/WebUIWrapper/bin
 /windows/WebUIWrapper/obj
+/windows/lib
 /ext/installfiles/windows/ZeroTier One-SetupFiles
 /ext/installfiles/windows/Prerequisites
 /ext/installfiles/windows/*-cache
@@ -49,6 +51,7 @@ enc_temp_folder
 /world/mkworld
 /world/*.c25519
 zt1-src.tar.gz
+/MacEthernetTapAgent
 
 # Miscellaneous temporaries, build files, etc.
 *.log
@@ -111,3 +114,9 @@ build/
 !default.perspectivev3
 *.xccheckout
 xcuserdata/
+ext/librethinkdbxx/build
+.vscode
+__pycache__
+*~
+attic/world/*.c25519
+attic/world/mkworld

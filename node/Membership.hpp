@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_MEMBERSHIP_HPP
@@ -59,20 +67,23 @@ public:
 	Membership();
 
 	/**
-	 * Send COM and other credentials to this peer if needed
-	 *
-	 * This checks last pushed times for our COM and for other credentials and
-	 * sends VERB_NETWORK_CREDENTIALS if the recipient might need them.
+	 * Send COM and other credentials to this peer
 	 *
 	 * @param RR Runtime environment
 	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param now Current time
 	 * @param peerAddress Address of member peer (the one that this Membership describes)
 	 * @param nconf My network config
-	 * @param localCapabilityIndex Index of local capability to include (in nconf.capabilities[]) or -1 if none
-	 * @param force If true, send objects regardless of last push time
 	 */
-	void pushCredentials(const RuntimeEnvironment *RR,void *tPtr,const uint64_t now,const Address &peerAddress,const NetworkConfig &nconf,int localCapabilityIndex,const bool force);
+	void pushCredentials(const RuntimeEnvironment *RR,void *tPtr,const int64_t now,const Address &peerAddress,const NetworkConfig &nconf);
+
+	/**
+	 * @return True if we haven't pushed credentials in a long time (to cause proactive credential push)
+	 */
+	inline bool shouldPushCredentials(const int64_t now) const
+	{
+		return ((now - _lastPushedCredentials) > ZT_PEER_ACTIVITY_TIMEOUT);
+	}
 
 	/**
 	 * Check whether we should push MULTICAST_LIKEs to this peer, and update last sent time if true
@@ -80,7 +91,7 @@ public:
 	 * @param now Current time
 	 * @return True if we should update multicasts
 	 */
-	inline bool multicastLikeGate(const uint64_t now)
+	inline bool multicastLikeGate(const int64_t now)
 	{
 		if ((now - _lastUpdatedMulticast) >= ZT_MULTICAST_ANNOUNCE_PERIOD) {
 			_lastUpdatedMulticast = now;
@@ -102,6 +113,11 @@ public:
 		return nconf.com.agreesWith(_com);
 	}
 
+	inline bool recentlyAssociated(const int64_t now) const
+	{
+		return ((_com)&&((now - _com.timestamp()) < ZT_PEER_ACTIVITY_TIMEOUT));
+	}
+
 	/**
 	 * Check whether the peer represented by this Membership owns a given resource
 	 *
@@ -120,7 +136,7 @@ public:
 			if (_isCredentialTimestampValid(nconf,*v)&&(v->owns(r)))
 				return true;
 		}
-		return false;
+		return _isV6NDPEmulated(nconf,r);
 	}
 
 	/**
@@ -167,18 +183,7 @@ public:
 	 * @param now Current time
 	 * @param nconf Current network configuration
 	 */
-	void clean(const uint64_t now,const NetworkConfig &nconf);
-
-	/**
-	 * Reset last pushed time for local credentials
-	 *
-	 * This is done when we update our network configuration and our credentials have changed
-	 */
-	inline void resetPushState()
-	{
-		_lastPushedCom = 0;
-		memset(&_localCredLastPushed,0,sizeof(_localCredLastPushed));
-	}
+	void clean(const int64_t now,const NetworkConfig &nconf);
 
 	/**
 	 * Generates a key for the internal use in indexing credentials by type and credential ID
@@ -186,19 +191,28 @@ public:
 	static uint64_t credentialKey(const Credential::Type &t,const uint32_t i) { return (((uint64_t)t << 32) | (uint64_t)i); }
 
 private:
+	inline bool _isV6NDPEmulated(const NetworkConfig &nconf,const MAC &m) const { return false; }
+	inline bool _isV6NDPEmulated(const NetworkConfig &nconf,const InetAddress &ip) const
+	{
+		if ((ip.isV6())&&(nconf.ndpEmulation())&&((InetAddress::makeIpv66plane(nconf.networkId,nconf.issuedTo.toInt()).ipsEqual(ip))||(InetAddress::makeIpv6rfc4193(nconf.networkId,nconf.issuedTo.toInt()).ipsEqual(ip)))) {
+			return true;
+		}
+		return false;
+	}
+
 	template<typename C>
 	inline bool _isCredentialTimestampValid(const NetworkConfig &nconf,const C &remoteCredential) const
 	{
-		const uint64_t ts = remoteCredential.timestamp();
+		const int64_t ts = remoteCredential.timestamp();
 		if (((ts >= nconf.timestamp) ? (ts - nconf.timestamp) : (nconf.timestamp - ts)) <= nconf.credentialTimeMaxDelta) {
-			const uint64_t *threshold = _revocations.get(credentialKey(C::credentialType(),remoteCredential.id()));
+			const int64_t *threshold = _revocations.get(credentialKey(C::credentialType(),remoteCredential.id()));
 			return ((!threshold)||(ts > *threshold));
 		}
 		return false;
 	}
 
 	template<typename C>
-	void _cleanCredImpl(const NetworkConfig &nconf,Hashtable<uint32_t,C> &remoteCreds)
+	inline void _cleanCredImpl(const NetworkConfig &nconf,Hashtable<uint32_t,C> &remoteCreds)
 	{
 		uint32_t *k = (uint32_t *)0;
 		C *v = (C *)0;
@@ -210,31 +224,24 @@ private:
 	}
 
 	// Last time we pushed MULTICAST_LIKE(s)
-	uint64_t _lastUpdatedMulticast;
-
-	// Last time we pushed our COM to this peer
-	uint64_t _lastPushedCom;
+	int64_t _lastUpdatedMulticast;
 
 	// Revocation threshold for COM or 0 if none
-	uint64_t _comRevocationThreshold;
+	int64_t _comRevocationThreshold;
+
+	// Time we last pushed credentials
+	int64_t _lastPushedCredentials;
 
 	// Remote member's latest network COM
 	CertificateOfMembership _com;
 
 	// Revocations by credentialKey()
-	Hashtable< uint64_t,uint64_t > _revocations;
+	Hashtable< uint64_t,int64_t > _revocations;
 
 	// Remote credentials that we have received from this member (and that are valid)
 	Hashtable< uint32_t,Tag > _remoteTags;
 	Hashtable< uint32_t,Capability > _remoteCaps;
 	Hashtable< uint32_t,CertificateOfOwnership > _remoteCoos;
-
-	// Time we last pushed our local credentials to this member
-	struct {
-		uint64_t tag[ZT_MAX_NETWORK_TAGS];
-		uint64_t cap[ZT_MAX_NETWORK_CAPABILITIES];
-		uint64_t coo[ZT_MAX_CERTIFICATES_OF_OWNERSHIP];
-	} _localCredLastPushed;
 
 public:
 	class CapabilityIterator

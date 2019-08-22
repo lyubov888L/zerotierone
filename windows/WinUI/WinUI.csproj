@@ -80,6 +80,7 @@
     <Reference Include="System.Data" />
     <Reference Include="System.Deployment" />
     <Reference Include="System.Drawing" />
+    <Reference Include="System.Net.Http" />
     <Reference Include="System.Printing" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
@@ -104,10 +105,18 @@
     <Compile Include="AboutView.xaml.cs">
       <DependentUpon>AboutView.xaml</DependentUpon>
     </Compile>
+    <Compile Include="CentralAPI.cs" />
+    <Compile Include="CentralLogin.cs" />
+    <Compile Include="CentralNetwork.cs" />
+    <Compile Include="CentralServer.cs" />
+    <Compile Include="CentralToken.cs" />
+    <Compile Include="CentralUser.cs" />
+    <Compile Include="ISwitchable.cs" />
     <Compile Include="JoinNetworkView.xaml.cs">
       <DependentUpon>JoinNetworkView.xaml</DependentUpon>
     </Compile>
     <Compile Include="NetworkMonitor.cs" />
+    <Compile Include="NetworkNameGenerator.cs" />
     <Compile Include="NetworkRoute.cs" />
     <Compile Include="NetworksPage.xaml.cs">
       <DependentUpon>NetworksPage.xaml</DependentUpon>

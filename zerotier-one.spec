@@ -1,5 +1,5 @@
 Name:           zerotier-one
-Version:        1.2.4
+Version:        1.4.2
 Release:        1%{?dist}
 Summary:        ZeroTier One network virtualization service
 
@@ -33,13 +33,13 @@ Requires(pre): /usr/sbin/useradd, /usr/bin/getent
 %description
 ZeroTier is a software defined networking layer for Earth.
 
-It can be used for on-premise network virtualization, as a peer to peer VPN 
-for mobile teams, for hybrid or multi-data-center cloud deployments, or just 
+It can be used for on-premise network virtualization, as a peer to peer VPN
+for mobile teams, for hybrid or multi-data-center cloud deployments, or just
 about anywhere else secure software defined virtual networking is useful.
 
-ZeroTier One is our OS-level client service. It allows Mac, Linux, Windows, 
-FreeBSD, and soon other types of clients to join ZeroTier virtual networks 
-like conventional VPNs or VLANs. It can run on native systems, VMs, or 
+ZeroTier One is our OS-level client service. It allows Mac, Linux, Windows,
+FreeBSD, and soon other types of clients to join ZeroTier virtual networks
+like conventional VPNs or VLANs. It can run on native systems, VMs, or
 containers (Docker, OpenVZ, etc.).
 
 %prep
@@ -110,8 +110,8 @@ case "$1" in
     chkconfig --add zerotier-one
   ;;
   2)
-    chkconfig --del newservice
-    chkconfig --add newservice
+    chkconfig --del zerotier-one
+    chkconfig --add zerotier-one
   ;;
 esac
 %endif
@@ -145,6 +145,18 @@ esac
 %endif
 
 %changelog
+* Mon Aug 04 2019 Adam Ierymenko <adam.ierymenko@zerotier.com> - 1.4.2-0.1
+- see https://github.com/zerotier/ZeroTierOne for release notes
+
+* Mon Jul 29 2019 Adam Ierymenko <adam.ierymenko@zerotier.com> - 1.4.0-0.1
+- see https://github.com/zerotier/ZeroTierOne for release notes
+
+* Tue May 08 2018 Adam Ierymenko <adam.ierymenko@zerotier.com> - 1.2.10-0.1
+- see https://github.com/zerotier/ZeroTierOne for release notes
+
+* Thu May 03 2018 Adam Ierymenko <adam.ierymenko@zerotier.com> - 1.2.8-0.1
+- see https://github.com/zerotier/ZeroTierOne for release notes
+
 * Mon Apr 24 2017 Adam Ierymenko <adam.ierymenko@zerotier.com> - 1.2.2-0.1
 - see https://github.com/zerotier/ZeroTierOne for release notes
 

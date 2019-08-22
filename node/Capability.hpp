@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_CAPABILITY_HPP
@@ -44,7 +52,7 @@ class RuntimeEnvironment;
  * (1) Evaluates its capabilities in ascending order of ID to determine
  *     which capability allows it to transmit this packet.
  * (2) If it has not done so lately, it then sends this capability to the
- *     receving peer ("presents" it).
+ *     receiving peer ("presents" it).
  * (3) The sender then sends the packet.
  *
  * On the receiving side the receiver evaluates the capabilities presented
@@ -56,7 +64,7 @@ class RuntimeEnvironment;
  *
  * Capabilities support a chain of custody. This is currently unused but
  * in the future would allow the publication of capabilities that can be
- * handed off between nodes. Limited transferrability of capabilities is
+ * handed off between nodes. Limited transferability of capabilities is
  * a feature of true capability based security.
  */
 class Capability : public Credential
@@ -64,28 +72,33 @@ class Capability : public Credential
 public:
 	static inline Credential::Type credentialType() { return Credential::CREDENTIAL_TYPE_CAPABILITY; }
 
-	Capability()
+	Capability() :
+		_nwid(0),
+		_ts(0),
+		_id(0),
+		_maxCustodyChainLength(0),
+		_ruleCount(0)
 	{
-		memset(this,0,sizeof(Capability));
+		memset(_rules,0,sizeof(_rules));
+		memset(_custody,0,sizeof(_custody));
 	}
 
 	/**
 	 * @param id Capability ID
 	 * @param nwid Network ID
 	 * @param ts Timestamp (at controller)
-	 * @param mccl Maximum custody chain length (1 to create non-transferrable capability)
+	 * @param mccl Maximum custody chain length (1 to create non-transferable capability)
 	 * @param rules Network flow rules for this capability
 	 * @param ruleCount Number of flow rules
 	 */
-	Capability(uint32_t id,uint64_t nwid,uint64_t ts,unsigned int mccl,const ZT_VirtualNetworkRule *rules,unsigned int ruleCount)
+	Capability(uint32_t id,uint64_t nwid,int64_t ts,unsigned int mccl,const ZT_VirtualNetworkRule *rules,unsigned int ruleCount) :
+		_nwid(nwid),
+		_ts(ts),
+		_id(id),
+		_maxCustodyChainLength((mccl > 0) ? ((mccl < ZT_MAX_CAPABILITY_CUSTODY_CHAIN_LENGTH) ? mccl : (unsigned int)ZT_MAX_CAPABILITY_CUSTODY_CHAIN_LENGTH) : 1),
+		_ruleCount((ruleCount < ZT_MAX_CAPABILITY_RULES) ? ruleCount : ZT_MAX_CAPABILITY_RULES)
 	{
-		memset(this,0,sizeof(Capability));
-		_nwid = nwid;
-		_ts = ts;
-		_id = id;
-		_maxCustodyChainLength = (mccl > 0) ? ((mccl < ZT_MAX_CAPABILITY_CUSTODY_CHAIN_LENGTH) ? mccl : (unsigned int)ZT_MAX_CAPABILITY_CUSTODY_CHAIN_LENGTH) : 1;
-		_ruleCount = (ruleCount < ZT_MAX_CAPABILITY_RULES) ? ruleCount : ZT_MAX_CAPABILITY_RULES;
-		if (_ruleCount)
+		if (_ruleCount > 0)
 			memcpy(_rules,rules,sizeof(ZT_VirtualNetworkRule) * _ruleCount);
 	}
 
@@ -112,7 +125,7 @@ public:
 	/**
 	 * @return Timestamp
 	 */
-	inline uint64_t timestamp() const { return _ts; }
+	inline int64_t timestamp() const { return _ts; }
 
 	/**
 	 * @return Last 'to' address in chain of custody
@@ -270,6 +283,13 @@ public:
 					b.append((uint32_t)rules[i].v.tag.id);
 					b.append((uint32_t)rules[i].v.tag.value);
 					break;
+				case ZT_NETWORK_RULE_MATCH_INTEGER_RANGE:
+					b.append((uint8_t)19);
+					b.append((uint64_t)rules[i].v.intRange.start);
+					b.append((uint64_t)(rules[i].v.intRange.start + (uint64_t)rules[i].v.intRange.end)); // more future-proof
+					b.append((uint16_t)rules[i].v.intRange.idx);
+					b.append((uint8_t)rules[i].v.intRange.format);
+					break;
 			}
 		}
 	}
@@ -358,6 +378,12 @@ public:
 					rules[ruleCount].v.tag.id = b.template at<uint32_t>(p);
 					rules[ruleCount].v.tag.value = b.template at<uint32_t>(p + 4);
 					break;
+				case ZT_NETWORK_RULE_MATCH_INTEGER_RANGE:
+					rules[ruleCount].v.intRange.start = b.template at<uint64_t>(p);
+					rules[ruleCount].v.intRange.end = (uint32_t)(b.template at<uint64_t>(p + 8) - rules[ruleCount].v.intRange.start);
+					rules[ruleCount].v.intRange.idx = b.template at<uint16_t>(p + 16);
+					rules[ruleCount].v.intRange.format = (uint8_t)b[p + 18];
+					break;
 			}
 			p += fieldLen;
 			++ruleCount;
@@ -402,7 +428,7 @@ public:
 	template<unsigned int C>
 	inline unsigned int deserialize(const Buffer<C> &b,unsigned int startAt = 0)
 	{
-		memset(this,0,sizeof(Capability));
+		*this = Capability();
 
 		unsigned int p = startAt;
 
@@ -412,24 +438,24 @@ public:
 
 		const unsigned int rc = b.template at<uint16_t>(p); p += 2;
 		if (rc > ZT_MAX_CAPABILITY_RULES)
-			throw std::runtime_error("rule overflow");
+			throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_OVERFLOW;
 		deserializeRules(b,p,_rules,_ruleCount,rc);
 
 		_maxCustodyChainLength = (unsigned int)b[p++];
 		if ((_maxCustodyChainLength < 1)||(_maxCustodyChainLength > ZT_MAX_CAPABILITY_CUSTODY_CHAIN_LENGTH))
-			throw std::runtime_error("invalid max custody chain length");
+			throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_OVERFLOW;
 
 		for(unsigned int i=0;;++i) {
 			const Address to(b.field(p,ZT_ADDRESS_LENGTH),ZT_ADDRESS_LENGTH); p += ZT_ADDRESS_LENGTH;
 			if (!to)
 				break;
 			if ((i >= _maxCustodyChainLength)||(i >= ZT_MAX_CAPABILITY_CUSTODY_CHAIN_LENGTH))
-				throw std::runtime_error("unterminated custody chain");
+				throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_OVERFLOW;
 			_custody[i].to = to;
 			_custody[i].from.setTo(b.field(p,ZT_ADDRESS_LENGTH),ZT_ADDRESS_LENGTH); p += ZT_ADDRESS_LENGTH;
 			if (b[p++] == 1) {
 				if (b.template at<uint16_t>(p) != ZT_C25519_SIGNATURE_LEN)
-					throw std::runtime_error("invalid signature");
+					throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_INVALID_CRYPTOGRAPHIC_TOKEN;
 				p += 2;
 				memcpy(_custody[i].signature.data,b.field(p,ZT_C25519_SIGNATURE_LEN),ZT_C25519_SIGNATURE_LEN); p += ZT_C25519_SIGNATURE_LEN;
 			} else {
@@ -439,7 +465,7 @@ public:
 
 		p += 2 + b.template at<uint16_t>(p);
 		if (p > b.size())
-			throw std::runtime_error("extended field overflow");
+			throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_OVERFLOW;
 
 		return (p - startAt);
 	}
@@ -452,7 +478,7 @@ public:
 
 private:
 	uint64_t _nwid;
-	uint64_t _ts;
+	int64_t _ts;
 	uint32_t _id;
 
 	unsigned int _maxCustodyChainLength;

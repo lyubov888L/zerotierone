@@ -1,6 +1,86 @@
 ZeroTier Release Notes
 ======
 
+# 2019-08-12 -- Version 1.4.2
+
+ * Fix high CPU use bug on some platforms
+ * Fix issues with PostgreSQL controller DB (only affects Central)
+ * Restore backward compatibility with MacOS versions prior to 10.13
+
+# 2019-07-29 -- Version 1.4.0
+
+### Major Changes
+
+ * Mac version no longer requires a kernel extension, instead making use of the [feth interfaces](https://apple.stackexchange.com/questions/337715/fake-ethernet-interfaces-feth-if-fake-anyone-ever-seen-this).
+ * Added support for concurrent multipath (multiple paths at once) with traffic weighting by link quality and faster recovery from lost links.
+ * Added under-the-hood support for QoS (not yet exposed) that will eventually be configurable via our rules engine.
+
+### Minor Changes and Bug Fixes
+
+ * Experimental controller DB driver for [LF](https://github.com/zerotier/lf) to store network controller data (LFDB.cpp / LFDB.hpp).
+ * Modified credential push and direct path push timings and algorithms to somewhat reduce "chattiness" of the protocol when idle. More radical background overhead reductions will have to wait for the 2.x line.
+ * Removed our beta/half-baked integration of Central with the Windows UI. We're going to do a whole new UI of some kind in the future at least for Windows and Mac.
+ * Fixed stack overflow issues on Linux versions using musl libc.
+ * Fixed some alignment problems reported on ARM and ARM64, but some reports we could not reproduce so please report any issues with exact chip, OS/distro, and ZeroTier version in use.
+ * Fixed numerous other small issues and bugs such as ARM alignment issues causing crashes on some devices.
+ * Windows now sets the adapter name such that it is consistent in both the Windows UI and command line utilities.
+
+# 2018-07-27 -- Version 1.2.12
+
+ * Fixed a bug that caused exits to take a long time on Mac due to huge numbers of redundant attempts to delete managed routes.
+ * Fixed a socket limit problem on Windows that caused the ZeroTier service to run out of sockets, causing the UI and CLI to be unable to access the API.
+ * Fixed a threading bug in the ZeroTier Core, albeit one that never manifested on the regular ZeroTier One service/client.
+ * Fixed a bug that could cause the service to crash if an authorized local client accessed an invalid URL via the control API. (Not exploitable since you needed admin access anyway.)
+
+# 2018-05-08 -- Version 1.2.10
+
+ * Fix bug loading `moons.d/` files for federated root operation.
+ * Fix compile problem with ZT_DEBUG on some versions of `clang`
+ * Fix slow network startup bug related to loading of `networks.d/` cache files
+
+# 2018-04-27 -- Version 1.2.8
+
+ * Linux version once again builds with PIE (position independent executable) flags
+ * Fixed bug in zerotier-idtool file sign and verify
+ * Fixed minor OSX app typo
+ * Merged alpha NetBSD support (mostly untested, so YMMV)
+ * Merged several minor typo and one-liner bug fixes
+
+# 2018-04-17 -- Version 1.2.6
+
+ * Features and Core Improvements
+    * Path selection has been overhauled to improve path stability, simplify code, and prepare for multi-path and trunking in the next major release.
+    * This version introduces remote tracing for remote diagnostics. Network controllers can set a node (usually the controller itself) to receive remote tracing events from all members of the network or from select members. Events are only sent if they pertain to a given network for security reasons.
+    * Multicast replication can now be done by designated multicast replicators on a network (flagged as such at the controller) rather than by the sender. Most users won't want this, but it's useful for specialized use cases on hub-and-spoke networks and for low-power devices.
+    * Cryptographic performance improvements on several platforms.
+    * Multithreaded performance improvements throughout the code base, including the use of an inline lightweight spinlock for low-contention resources.
+ * Bugs fixed
+    * Disappearing routes on Mac (GitHub issue #600)
+    * Route flapping and path instability in some dual-stack V4/V6 networks
+    * Blacklist (in local.conf) doesn't work reliably (GitHub issue #656)
+    * Connection instabilities due to unsigned integer overflows in timing comparisons (use int64_t instead of uint64_t)
+    * Binaries don't run on some older or lower-end 32-bit ARM chips (build problem)
+    * ARM NEON crypto code crashes (build problem)
+    * Fixed some lock ordering issues revealed by "valgrind" tool
+    * The "zerotier-idtool" command could not be accessed from "zerotier-one" via command line switch
+    * Leaking sockets on some platforms when uPnP/NAT-PMP is enabled
+    * Fixed two very rare multithreading issues that were only observed on certain systems
+ * Platform-Specific Changes
+    * MacOS
+        * Installer now loads the kernel extension right away so that High Sierra users will see the prompt to authorize it. This is done in the "Security & Privacy" preference pane and must be done directly on the console (not via remote desktop). On High Sierra and newer kexts must be authorized at the console via security settings system preferences pane.
+    * Windows
+        * The Windows installer should now install the driver without requiring a special prompt in most cases. This should make it easier for our packages to be accepted into and updated in the Chocolatey repository and should make it easier to perform remote installs across groups of machines using IT management and provisioning tools.
+        * The Windows official packages are now signed with an EV certificate (with hardware key).
+        * The Windows UI can now log into ZeroTier Central and join networks via the Central API.
+        * The `zerotier-idtool` command should now work on Windows without ugly hacks.
+        * Upgraded the installer version.
+        * Made a few changes to hopefully fix sporadic "will not uninstall" problems, though we cannot duplicate these issues ourselves.
+    * Linux
+        * Device names are now generated deterministically based on network IDs for all newly joined networks.
+    * Android
+        * Multicast now works on Android in most cases! Android apps can send and receive multicast and subscribe to multicast group IPs. Note that in some cases the app must bind to the specific correct interface for this to work.
+        * IPv6 can be disabled in UI for cases where it causes problems.
+
 # 2017-04-20 -- Version 1.2.4
 
  * Managed routes are now only bifurcated for the default route. This is a change in behavior, though few people will probably notice. Bifurcating all managed routes was causing more trouble than it was worth for most users.
@@ -29,7 +109,7 @@ The largest new feature in 1.2.0, and the product of many months of work, is our
 
 Rules allow you to filter packets on your network and vector traffic to security observers. Security observation can be performed in-band using REDIRECT or out of band using TEE.
 
-Tags and capabilites provide advanced methods for implementing fine grained permission structures and micro-segmentation schemes without bloating the size and complexity of your rules table.
+Tags and capabilities provide advanced methods for implementing fine grained permission structures and micro-segmentation schemes without bloating the size and complexity of your rules table.
 
 See the [rules engine announcement blog post](https://www.zerotier.com/blog/?p=927) for an in-depth discussion of theory and implementation. The [manual](https://www.zerotier.com/manual.shtml) contains detailed information on rule, tag, and capability use, and the `rule-compiler/` subfolder of the ZeroTier source tree contains a JavaScript function to compile rules in our human-readable rule definition language into rules suitable for import into a network controller. (ZeroTier Central uses this same script to compile rules on [my.zerotier.com](https://my.zerotier.com/).)
 
@@ -112,7 +192,7 @@ A special kind of public network called an ad-hoc network may be accessed by joi
     | Start of port range (hex)
     Reserved ZeroTier address prefix indicating a controller-less network
 
-Ad-hoc networks are public (no access control) networks that have no network controller. Instead their configuration and other credentials are generated locally. Ad-hoc networks permit only IPv6 UDP and TCP unicast traffic (no multicast or broadcast) using 6plane format NDP-emulated IPv6 addresses. In addition an ad-hoc network ID encodes an IP port range. UDP packets and TCP SYN (connection open) packets are only allowed to desintation ports within the encoded range.
+Ad-hoc networks are public (no access control) networks that have no network controller. Instead their configuration and other credentials are generated locally. Ad-hoc networks permit only IPv6 UDP and TCP unicast traffic (no multicast or broadcast) using 6plane format NDP-emulated IPv6 addresses. In addition an ad-hoc network ID encodes an IP port range. UDP packets and TCP SYN (connection open) packets are only allowed to destination ports within the encoded range.
 
 For example `ff00160016000000` is an ad-hoc network allowing only SSH, while `ff0000ffff000000` is an ad-hoc network allowing any UDP or TCP port.
 
@@ -127,7 +207,7 @@ If you have data in an old SQLite3 controller we've included a NodeJS script in 
 ## Major Bug Fixes in 1.2.0
 
  * **The Windows HyperV 100% CPU bug is FINALLY DEAD**: This long-running problem turns out to have been an issue with Windows itself, but one we were triggering by placing invalid data into the Windows registry. Microsoft is aware of the issue but we've also fixed the triggering problem on our side. ZeroTier should now co-exist quite well with HyperV and should now be able to be bridged with a HyperV virtual switch.
- * **Segmenation faults on musl-libc based Linux systems**: Alpine Linux and some embedded Linux systems that use musl libc (a minimal libc) experienced segmentation faults. These were due to a smaller default stack size. A work-around that sets the stack size for new threads has been added.
+ * **Segmentation faults on musl-libc based Linux systems**: Alpine Linux and some embedded Linux systems that use musl libc (a minimal libc) experienced segmentation faults. These were due to a smaller default stack size. A work-around that sets the stack size for new threads has been added.
  * **Windows firewall blocks local JSON API**: On some Windows systems the firewall likes to block 127.0.0.1:9993 for mysterious reasons. This is now fixed in the installer via the addition of another firewall exemption rule.
  * **UI crash on embedded Windows due to missing fonts**: The MSI installer now ships fonts and will install them if they are not present, so this should be fixed.
 

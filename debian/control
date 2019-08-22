@@ -3,10 +3,17 @@ Maintainer: NAStools <github@didyouexpect.us>
 Section: net
 Priority: optional
 Standards-Version: 3.9.6
+<<<<<<< HEAD
 Build-Depends: debhelper (>= 9), liblz4-dev, libnatpmp-dev, ruby-ronn, dh-systemd
 Vcs-Git: git://github.com/didyouexpectthat/zerotierone
 Vcs-Browser: https://github.com/didyouexpectthat/zerotierone
 Homepage: https://www.zerotier.com
+=======
+Build-Depends: debhelper (>= 9)
+Vcs-Git: git://github.com/zerotier/ZeroTierOne
+Vcs-Browser: https://github.com/zerotier/ZeroTierOne
+Homepage: https://www.zerotier.com/
+>>>>>>> upstream/1.4.2
 
 Package: nastools-zerotier-one
 Architecture: any

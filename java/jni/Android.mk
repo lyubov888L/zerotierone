@@ -3,14 +3,19 @@ LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
 LOCAL_MODULE := ZeroTierOneJNI
-LOCAL_C_INCLUDES := $(ZT1)/include
-LOCAL_C_INCLUDES += $(ZT1)/node
-LOCAL_LDLIBS := -llog -latomic
+LOCAL_C_INCLUDES := \
+    $(ZT1)/include \
+    $(ZT1)/node \
+    $(ZT1)/osdep
+
+LOCAL_LDLIBS := -llog
 # LOCAL_CFLAGS := -g
+
+LOCAL_CFLAGS := -DZT_USE_MINIUPNPC
 
 # ZeroTierOne SDK source files
 LOCAL_SRC_FILES := \
-	$(ZT1)/node/C25519.cpp \
+    $(ZT1)/node/C25519.cpp \
 	$(ZT1)/node/Capability.cpp \
 	$(ZT1)/node/CertificateOfMembership.cpp \
 	$(ZT1)/node/CertificateOfOwnership.cpp \
@@ -34,8 +39,9 @@ LOCAL_SRC_FILES := \
 	$(ZT1)/node/Switch.cpp \
 	$(ZT1)/node/Tag.cpp \
 	$(ZT1)/node/Topology.cpp \
-	$(ZT1)/node/Utils.cpp
-
+	$(ZT1)/node/Trace.cpp \
+	$(ZT1)/node/Utils.cpp \
+	$(ZT1)/osdep/OSUtils.cpp
 
 # JNI Files
 LOCAL_SRC_FILES += \

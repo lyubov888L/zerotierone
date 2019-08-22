@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_MULTICASTER_HPP
@@ -34,50 +42,20 @@
 #include "OutboundMulticast.hpp"
 #include "Utils.hpp"
 #include "Mutex.hpp"
-#include "NonCopyable.hpp"
+#include "SharedPtr.hpp"
 
 namespace ZeroTier {
 
 class RuntimeEnvironment;
 class CertificateOfMembership;
 class Packet;
+class Network;
 
 /**
  * Database of known multicast peers within a network
  */
-class Multicaster : NonCopyable
+class Multicaster
 {
-private:
-	struct Key
-	{
-		Key() : nwid(0),mg() {}
-		Key(uint64_t n,const MulticastGroup &g) : nwid(n),mg(g) {}
-
-		uint64_t nwid;
-		MulticastGroup mg;
-
-		inline bool operator==(const Key &k) const throw() { return ((nwid == k.nwid)&&(mg == k.mg)); }
-		inline unsigned long hashCode() const throw() { return (mg.hashCode() ^ (unsigned long)(nwid ^ (nwid >> 32))); }
-	};
-
-	struct MulticastGroupMember
-	{
-		MulticastGroupMember() {}
-		MulticastGroupMember(const Address &a,uint64_t ts) : address(a),timestamp(ts) {}
-
-		Address address;
-		uint64_t timestamp; // time of last notification
-	};
-
-	struct MulticastGroupStatus
-	{
-		MulticastGroupStatus() : lastExplicitGather(0) {}
-
-		uint64_t lastExplicitGather;
-		std::list<OutboundMulticast> txQueue; // pending outbound multicasts
-		std::vector<MulticastGroupMember> members; // members of this group
-	};
-
 public:
 	Multicaster(const RuntimeEnvironment *renv);
 	~Multicaster();
@@ -90,7 +68,7 @@ public:
 	 * @param mg Multicast group
 	 * @param member New member address
 	 */
-	inline void add(void *tPtr,uint64_t now,uint64_t nwid,const MulticastGroup &mg,const Address &member)
+	inline void add(void *tPtr,int64_t now,uint64_t nwid,const MulticastGroup &mg,const Address &member)
 	{
 		Mutex::Lock _l(_groups_m);
 		_add(tPtr,now,nwid,mg,_groups[Multicaster::Key(nwid,mg)],member);
@@ -109,7 +87,7 @@ public:
 	 * @param count Number of addresses
 	 * @param totalKnown Total number of known addresses as reported by peer
 	 */
-	void addMultiple(void *tPtr,uint64_t now,uint64_t nwid,const MulticastGroup &mg,const void *addresses,unsigned int count,unsigned int totalKnown);
+	void addMultiple(void *tPtr,int64_t now,uint64_t nwid,const MulticastGroup &mg,const void *addresses,unsigned int count,unsigned int totalKnown);
 
 	/**
 	 * Remove a multicast group member (if present)
@@ -152,11 +130,9 @@ public:
 	 * Send a multicast
 	 *
 	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
-	 * @param limit Multicast limit
 	 * @param now Current time
-	 * @param nwid Network ID
-	 * @param disableCompression Disable packet payload compression?
-	 * @param alwaysSendTo Send to these peers first and even if not included in subscriber list
+	 * @param network Network
+	 * @param origin Origin of multicast (to not return to sender) or NULL if none
 	 * @param mg Multicast group
 	 * @param src Source Ethernet MAC address or NULL to skip in packet and compute from ZT address (non-bridged mode)
 	 * @param etherType Ethernet frame type
@@ -165,11 +141,9 @@ public:
 	 */
 	void send(
 		void *tPtr,
-		unsigned int limit,
-		uint64_t now,
-		uint64_t nwid,
-		bool disableCompression,
-		const std::vector<Address> &alwaysSendTo,
+		int64_t now,
+		const SharedPtr<Network> &network,
+		const Address &origin,
 		const MulticastGroup &mg,
 		const MAC &src,
 		unsigned int etherType,
@@ -182,54 +156,53 @@ public:
 	 * @param RR Runtime environment
 	 * @param now Current time
 	 */
-	void clean(uint64_t now);
-
-	/**
-	 * Add an authorization credential
-	 *
-	 * The Multicaster keeps its own track of when valid credentials of network
-	 * membership are presented. This allows it to control MULTICAST_LIKE
-	 * GATHER authorization for networks this node does not belong to.
-	 *
-	 * @param com Certificate of membership
-	 * @param alreadyValidated If true, COM has already been checked and found to be valid and signed
-	 */
-	void addCredential(void *tPtr,const CertificateOfMembership &com,bool alreadyValidated);
-
-	/**
-	 * Check authorization for GATHER and LIKE for non-network-members
-	 *
-	 * @param a Address of peer
-	 * @param nwid Network ID
-	 * @param now Current time
-	 * @return True if GATHER and LIKE should be allowed
-	 */
-	bool cacheAuthorized(const Address &a,const uint64_t nwid,const uint64_t now) const
-	{
-		Mutex::Lock _l(_gatherAuth_m);
-		const uint64_t *p = _gatherAuth.get(_GatherAuthKey(nwid,a));
-		return ((p)&&((now - *p) < ZT_MULTICAST_CREDENTIAL_EXPIRATON));
-	}
+	void clean(int64_t now);
 
 private:
-	void _add(void *tPtr,uint64_t now,uint64_t nwid,const MulticastGroup &mg,MulticastGroupStatus &gs,const Address &member);
+	struct Key
+	{
+		Key() : nwid(0),mg() {}
+		Key(uint64_t n,const MulticastGroup &g) : nwid(n),mg(g) {}
 
-	const RuntimeEnvironment *RR;
+		uint64_t nwid;
+		MulticastGroup mg;
+
+		inline bool operator==(const Key &k) const { return ((nwid == k.nwid)&&(mg == k.mg)); }
+		inline bool operator!=(const Key &k) const { return ((nwid != k.nwid)||(mg != k.mg)); }
+		inline unsigned long hashCode() const { return (mg.hashCode() ^ (unsigned long)(nwid ^ (nwid >> 32))); }
+	};
+
+	struct MulticastGroupMember
+	{
+		MulticastGroupMember() {}
+		MulticastGroupMember(const Address &a,uint64_t ts) : address(a),timestamp(ts) {}
+
+		inline bool operator<(const MulticastGroupMember &a) const { return (address < a.address); }
+		inline bool operator==(const MulticastGroupMember &a) const { return (address == a.address); }
+		inline bool operator!=(const MulticastGroupMember &a) const { return (address != a.address); }
+		inline bool operator<(const Address &a) const { return (address < a); }
+		inline bool operator==(const Address &a) const { return (address == a); }
+		inline bool operator!=(const Address &a) const { return (address != a); }
+
+		Address address;
+		uint64_t timestamp; // time of last notification
+	};
+
+	struct MulticastGroupStatus
+	{
+		MulticastGroupStatus() : lastExplicitGather(0) {}
+
+		uint64_t lastExplicitGather;
+		std::list<OutboundMulticast> txQueue; // pending outbound multicasts
+		std::vector<MulticastGroupMember> members; // members of this group
+	};
+
+	void _add(void *tPtr,int64_t now,uint64_t nwid,const MulticastGroup &mg,MulticastGroupStatus &gs,const Address &member);
+
+	const RuntimeEnvironment *const RR;
 
 	Hashtable<Multicaster::Key,MulticastGroupStatus> _groups;
 	Mutex _groups_m;
-
-	struct _GatherAuthKey
-	{
-		_GatherAuthKey() : member(0),networkId(0) {}
-		_GatherAuthKey(const uint64_t nwid,const Address &a) : member(a.toInt()),networkId(nwid) {}
-		inline unsigned long hashCode() const { return (unsigned long)(member ^ networkId); }
-		inline bool operator==(const _GatherAuthKey &k) const { return ((member == k.member)&&(networkId == k.networkId)); }
-		uint64_t member;
-		uint64_t networkId;
-	};
-	Hashtable< _GatherAuthKey,uint64_t > _gatherAuth;
-	Mutex _gatherAuth_m;
 };
 
 } // namespace ZeroTier

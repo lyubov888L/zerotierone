@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_BSDETHERNETTAP_HPP
@@ -30,10 +38,11 @@
 #include "../node/MulticastGroup.hpp"
 #include "../node/MAC.hpp"
 #include "Thread.hpp"
+#include "EthernetTap.hpp"
 
 namespace ZeroTier {
 
-class BSDEthernetTap
+class BSDEthernetTap : public EthernetTap
 {
 public:
 	BSDEthernetTap(
@@ -46,17 +55,18 @@ public:
 		void (*handler)(void *,void *,uint64_t,const MAC &,const MAC &,unsigned int,unsigned int,const void *,unsigned int),
 		void *arg);
 
-	~BSDEthernetTap();
+	virtual ~BSDEthernetTap();
 
-	void setEnabled(bool en);
-	bool enabled() const;
-	bool addIp(const InetAddress &ip);
-	bool removeIp(const InetAddress &ip);
-	std::vector<InetAddress> ips() const;
-	void put(const MAC &from,const MAC &to,unsigned int etherType,const void *data,unsigned int len);
-	std::string deviceName() const;
-	void setFriendlyName(const char *friendlyName);
-	void scanMulticastGroups(std::vector<MulticastGroup> &added,std::vector<MulticastGroup> &removed);
+	virtual void setEnabled(bool en);
+	virtual bool enabled() const;
+	virtual bool addIp(const InetAddress &ip);
+	virtual bool removeIp(const InetAddress &ip);
+	virtual std::vector<InetAddress> ips() const;
+	virtual void put(const MAC &from,const MAC &to,unsigned int etherType,const void *data,unsigned int len);
+	virtual std::string deviceName() const;
+	virtual void setFriendlyName(const char *friendlyName);
+	virtual void scanMulticastGroups(std::vector<MulticastGroup> &added,std::vector<MulticastGroup> &removed);
+	virtual void setMtu(unsigned int mtu);
 
 	void threadMain()
 		throw();

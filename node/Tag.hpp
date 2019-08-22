@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_TAG_HPP
@@ -50,16 +58,20 @@ class RuntimeEnvironment;
  * values.
  *
  * Unlike capabilities tags are signed only by the issuer and are never
- * transferrable.
+ * transferable.
  */
 class Tag : public Credential
 {
 public:
 	static inline Credential::Type credentialType() { return Credential::CREDENTIAL_TYPE_TAG; }
 
-	Tag()
+	Tag() :
+		_id(0),
+		_value(0),
+		_networkId(0),
+		_ts(0)
 	{
-		memset(this,0,sizeof(Tag));
+		memset(_signature.data,0,sizeof(_signature.data));
 	}
 
 	/**
@@ -69,7 +81,7 @@ public:
 	 * @param id Tag ID
 	 * @param value Tag value
 	 */
-	Tag(const uint64_t nwid,const uint64_t ts,const Address &issuedTo,const uint32_t id,const uint32_t value) :
+	Tag(const uint64_t nwid,const int64_t ts,const Address &issuedTo,const uint32_t id,const uint32_t value) :
 		_id(id),
 		_value(value),
 		_networkId(nwid),
@@ -77,12 +89,13 @@ public:
 		_issuedTo(issuedTo),
 		_signedBy()
 	{
+		memset(_signature.data,0,sizeof(_signature.data));
 	}
 
 	inline uint32_t id() const { return _id; }
 	inline const uint32_t &value() const { return _value; }
 	inline uint64_t networkId() const { return _networkId; }
-	inline uint64_t timestamp() const { return _ts; }
+	inline int64_t timestamp() const { return _ts; }
 	inline const Address &issuedTo() const { return _issuedTo; }
 	inline const Address &signedBy() const { return _signedBy; }
 
@@ -141,7 +154,7 @@ public:
 	{
 		unsigned int p = startAt;
 
-		memset(this,0,sizeof(Tag));
+		*this = Tag();
 
 		_networkId = b.template at<uint64_t>(p); p += 8;
 		_ts = b.template at<uint64_t>(p); p += 8;
@@ -153,7 +166,7 @@ public:
 		_signedBy.setTo(b.field(p,ZT_ADDRESS_LENGTH),ZT_ADDRESS_LENGTH); p += ZT_ADDRESS_LENGTH;
 		if (b[p++] == 1) {
 			if (b.template at<uint16_t>(p) != ZT_C25519_SIGNATURE_LEN)
-				throw std::runtime_error("invalid signature length");
+				throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_INVALID_CRYPTOGRAPHIC_TOKEN;
 			p += 2;
 			memcpy(_signature.data,b.field(p,ZT_C25519_SIGNATURE_LEN),ZT_C25519_SIGNATURE_LEN); p += ZT_C25519_SIGNATURE_LEN;
 		} else {
@@ -162,7 +175,7 @@ public:
 
 		p += 2 + b.template at<uint16_t>(p);
 		if (p > b.size())
-			throw std::runtime_error("extended field overflow");
+			throw ZT_EXCEPTION_INVALID_SERIALIZED_DATA_OVERFLOW;
 
 		return (p - startAt);
 	}
@@ -191,7 +204,7 @@ private:
 	uint32_t _id;
 	uint32_t _value;
 	uint64_t _networkId;
-	uint64_t _ts;
+	int64_t _ts;
 	Address _issuedTo;
 	Address _signedBy;
 	C25519::Signature _signature;

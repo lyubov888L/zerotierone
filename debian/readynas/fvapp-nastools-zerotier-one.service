@@ -1,6 +1,11 @@
 [Unit]
 Description=ZeroTier One
+<<<<<<< HEAD:debian/readynas/fvapp-nastools-zerotier-one.service
 After=network.target apache2.service
+=======
+After=network-online.target
+Wants=network-online.target
+>>>>>>> upstream/1.4.2:debian/zerotier-one.service
 
 [Service]
 ExecStart=/apps/nastools-zerotier-one/sbin/zerotier-one

@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,24 +13,27 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_PEER_HPP
 #define ZT_PEER_HPP
 
-#include <stdint.h>
-
-#include "Constants.hpp"
-
-#include <algorithm>
-#include <utility>
 #include <vector>
-#include <stdexcept>
 
 #include "../include/ZeroTierOne.h"
 
+#include "Constants.hpp"
 #include "RuntimeEnvironment.hpp"
+#include "Node.hpp"
 #include "Path.hpp"
 #include "Address.hpp"
 #include "Utils.hpp"
@@ -41,14 +44,15 @@
 #include "AtomicCounter.hpp"
 #include "Hashtable.hpp"
 #include "Mutex.hpp"
-#include "NonCopyable.hpp"
+
+#define ZT_PEER_MAX_SERIALIZED_STATE_SIZE (sizeof(Peer) + 32 + (sizeof(Path) * 2))
 
 namespace ZeroTier {
 
 /**
  * Peer on P2P Network (virtual layer 1)
  */
-class Peer : NonCopyable
+class Peer
 {
 	friend class SharedPtr<Peer>;
 
@@ -71,12 +75,12 @@ public:
 	/**
 	 * @return This peer's ZT address (short for identity().address())
 	 */
-	inline const Address &address() const throw() { return _id.address(); }
+	inline const Address &address() const { return _id.address(); }
 
 	/**
 	 * @return This peer's identity
 	 */
-	inline const Identity &identity() const throw() { return _id; }
+	inline const Identity &identity() const { return _id; }
 
 	/**
 	 * Log receipt of an authenticated packet
@@ -92,26 +96,37 @@ public:
 	 * @param inRePacketId Packet ID in reply to (default: none)
 	 * @param inReVerb Verb in reply to (for OK/ERROR, default: VERB_NOP)
 	 * @param trustEstablished If true, some form of non-trivial trust (like allowed in network) has been established
+	 * @param networkId Network ID if this pertains to a network, or 0 otherwise
 	 */
 	void received(
 		void *tPtr,
 		const SharedPtr<Path> &path,
 		const unsigned int hops,
 		const uint64_t packetId,
+		const unsigned int payloadLength,
 		const Packet::Verb verb,
 		const uint64_t inRePacketId,
 		const Packet::Verb inReVerb,
-		const bool trustEstablished);
+		const bool trustEstablished,
+		const uint64_t networkId);
 
 	/**
+	 * Check whether we have an active path to this peer via the given address
+	 *
 	 * @param now Current time
 	 * @param addr Remote address
 	 * @return True if we have an active path to this destination
 	 */
-	inline bool hasActivePathTo(uint64_t now,const InetAddress &addr) const
+	inline bool hasActivePathTo(int64_t now,const InetAddress &addr) const
 	{
 		Mutex::Lock _l(_paths_m);
-		return ( ((addr.ss_family == AF_INET)&&(_v4Path.p)&&(_v4Path.p->address() == addr)&&(_v4Path.p->alive(now))) || ((addr.ss_family == AF_INET6)&&(_v6Path.p)&&(_v6Path.p->address() == addr)&&(_v6Path.p->alive(now))) );
+		for(unsigned int i=0;i<ZT_MAX_PEER_NETWORK_PATHS;++i) {
+			if (_paths[i].p) {
+				if (((now - _paths[i].lr) < ZT_PEER_PATH_EXPIRATION)&&(_paths[i].p->address() == addr))
+					return true;
+			} else break;
+		}
+		return false;
 	}
 
 	/**
@@ -124,19 +139,102 @@ public:
 	 * @param force If true, send even if path is not alive
 	 * @return True if we actually sent something
 	 */
-	bool sendDirect(void *tPtr,const void *data,unsigned int len,uint64_t now,bool force);
+	inline bool sendDirect(void *tPtr,const void *data,unsigned int len,int64_t now,bool force)
+	{
+		SharedPtr<Path> bp(getAppropriatePath(now,force));
+		if (bp)
+			return bp->send(RR,tPtr,data,len,now);
+		return false;
+	}
 
 	/**
-	 * Get the best current direct path
+	 * Record statistics on outgoing packets
 	 *
-	 * This does not check Path::alive(), but does return the most recently
-	 * active path and does check expiration (which is a longer timeout).
+	 * @param path Path over which packet was sent
+	 * @param id Packet ID
+	 * @param len Length of packet payload
+	 * @param verb Packet verb
+	 * @param now Current time
+	 */
+	void recordOutgoingPacket(const SharedPtr<Path> &path, const uint64_t packetId, uint16_t payloadLength, const Packet::Verb verb, int64_t now);
+
+	/**
+	 * Record statistics on incoming packets
+	 *
+	 * @param path Path over which packet was sent
+	 * @param id Packet ID
+	 * @param len Length of packet payload
+	 * @param verb Packet verb
+	 * @param now Current time
+	 */
+	void recordIncomingPacket(void *tPtr, const SharedPtr<Path> &path, const uint64_t packetId, uint16_t payloadLength, const Packet::Verb verb, int64_t now);
+
+	/**
+	 * Send an ACK to peer for the most recent packets received
+	 *
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
+	 * @param localSocket Raw socket the ACK packet will be sent over
+	 * @param atAddress Destination for the ACK packet
+	 * @param now Current time
+	 */
+	void sendACK(void *tPtr, const SharedPtr<Path> &path, const int64_t localSocket,const InetAddress &atAddress,int64_t now);
+
+	/**
+	 * Send a QoS packet to peer so that it can evaluate the quality of this link
+	 *
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
+	 * @param localSocket Raw socket the QoS packet will be sent over
+	 * @param atAddress Destination for the QoS packet
+	 * @param now Current time
+	 */
+	void sendQOS_MEASUREMENT(void *tPtr, const SharedPtr<Path> &path, const int64_t localSocket,const InetAddress &atAddress,int64_t now);
+
+	/**
+	 * Compute relative quality values and allocations for the components of the aggregate link
+	 *
+	 * @param now Current time
+	 */
+	void computeAggregateProportionalAllocation(int64_t now);
+
+	/**
+	 * @return The aggregate link Packet Delay Variance (PDV)
+	 */
+	int computeAggregateLinkPacketDelayVariance();
+
+	/**
+	 * @return The aggregate link mean latency
+	 */
+	int computeAggregateLinkMeanLatency();
+
+	/**
+	 * @return The number of currently alive "physical" paths in the aggregate link
+	 */
+	int aggregateLinkPhysicalPathCount();
+
+	/**
+	 * @return The number of currently alive "logical" paths in the aggregate link
+	 */
+	int aggregateLinkLogicalPathCount();
+
+	/**
+	 * Get the most appropriate direct path based on current multipath and QoS configuration
 	 *
 	 * @param now Current time
 	 * @param includeExpired If true, include even expired paths
 	 * @return Best current path or NULL if none
 	 */
-	SharedPtr<Path> getBestPath(uint64_t now,bool includeExpired);
+	SharedPtr<Path> getAppropriatePath(int64_t now, bool includeExpired);
+
+	/**
+	 * Generate a human-readable string of interface names making up the aggregate link, also include
+	 * moving allocation and IP version number for each (for tracing)
+	 */
+	char *interfaceListStr();
+
+	/**
+	 * Send VERB_RENDEZVOUS to this and another peer via the best common IP scope and path
+	 */
+	void introduce(void *const tPtr,const int64_t now,const SharedPtr<Peer> &other) const;
 
 	/**
 	 * Send a HELLO to this peer at a specified physical address
@@ -144,12 +242,11 @@ public:
 	 * No statistics or sent times are updated here.
 	 *
 	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
-	 * @param localAddr Local address
+	 * @param localSocket Local source socket
 	 * @param atAddress Destination address
 	 * @param now Current time
-	 * @param counter Outgoing packet counter
 	 */
-	void sendHELLO(void *tPtr,const InetAddress &localAddr,const InetAddress &atAddress,uint64_t now,unsigned int counter);
+	void sendHELLO(void *tPtr,const int64_t localSocket,const InetAddress &atAddress,int64_t now);
 
 	/**
 	 * Send ECHO (or HELLO for older peers) to this peer at the given address
@@ -157,13 +254,12 @@ public:
 	 * No statistics or sent times are updated here.
 	 *
 	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
-	 * @param localAddr Local address
+	 * @param localSocket Local source socket
 	 * @param atAddress Destination address
 	 * @param now Current time
 	 * @param sendFullHello If true, always send a full HELLO instead of just an ECHO
-	 * @param counter Outgoing packet counter
 	 */
-	void attemptToContactAt(void *tPtr,const InetAddress &localAddr,const InetAddress &atAddress,uint64_t now,bool sendFullHello,unsigned int counter);
+	void attemptToContactAt(void *tPtr,const int64_t localSocket,const InetAddress &atAddress,int64_t now,bool sendFullHello);
 
 	/**
 	 * Try a memorized or statically defined path if any are known
@@ -173,106 +269,99 @@ public:
 	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param now Current time
 	 */
-	void tryMemorizedPath(void *tPtr,uint64_t now);
+	void tryMemorizedPath(void *tPtr,int64_t now);
 
 	/**
 	 * Send pings or keepalives depending on configured timeouts
 	 *
+	 * This also cleans up some internal data structures. It's called periodically from Node.
+	 *
 	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param now Current time
 	 * @param inetAddressFamily Keep this address family alive, or -1 for any
-	 * @return True if we have at least one direct path of the given family (or any if family is -1)
+	 * @return 0 if nothing sent or bit mask: bit 0x1 if IPv4 sent, bit 0x2 if IPv6 sent (0x3 means both sent)
 	 */
-	bool doPingAndKeepalive(void *tPtr,uint64_t now,int inetAddressFamily);
+	unsigned int doPingAndKeepalive(void *tPtr,int64_t now);
+
+	/**
+	 * Clear paths whose localSocket(s) are in a CLOSED state or have an otherwise INVALID state.
+	 * This should be called frequently so that we can detect and remove unproductive or invalid paths.
+	 *
+	 * Under the hood this is done periodically based on ZT_CLOSED_PATH_PRUNING_INTERVAL.
+	 *
+	 * @return Number of paths that were pruned this round
+	 */
+	unsigned int prunePaths();
+
+	/**
+	 * Process a cluster redirect sent by this peer
+	 *
+	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
+	 * @param originatingPath Path from which redirect originated
+	 * @param remoteAddress Remote address
+	 * @param now Current time
+	 */
+	void clusterRedirect(void *tPtr,const SharedPtr<Path> &originatingPath,const InetAddress &remoteAddress,const int64_t now);
 
 	/**
 	 * Reset paths within a given IP scope and address family
 	 *
 	 * Resetting a path involves sending an ECHO to it and then deactivating
-	 * it until or unless it responds.
+	 * it until or unless it responds. This is done when we detect a change
+	 * to our external IP or another system change that might invalidate
+	 * many or all current paths.
 	 *
 	 * @param tPtr Thread pointer to be handed through to any callbacks called as a result of this call
 	 * @param scope IP scope
 	 * @param inetAddressFamily Family e.g. AF_INET
 	 * @param now Current time
 	 */
-	inline void resetWithinScope(void *tPtr,InetAddress::IpScope scope,int inetAddressFamily,uint64_t now)
-	{
-		Mutex::Lock _l(_paths_m);
-		if ((inetAddressFamily == AF_INET)&&(_v4Path.lr)&&(_v4Path.p->address().ipScope() == scope)) {
-			attemptToContactAt(tPtr,_v4Path.p->localAddress(),_v4Path.p->address(),now,false,_v4Path.p->nextOutgoingCounter());
-			_v4Path.p->sent(now);
-			_v4Path.lr = 0; // path will not be used unless it speaks again
-		} else if ((inetAddressFamily == AF_INET6)&&(_v6Path.lr)&&(_v6Path.p->address().ipScope() == scope)) {
-			attemptToContactAt(tPtr,_v6Path.p->localAddress(),_v6Path.p->address(),now,false,_v6Path.p->nextOutgoingCounter());
-			_v6Path.p->sent(now);
-			_v6Path.lr = 0; // path will not be used unless it speaks again
-		}
-	}
-
-	/**
-	 * Indicate that the given address was provided by a cluster as a preferred destination
-	 *
-	 * @param addr Address cluster prefers that we use
-	 */
-	inline void setClusterPreferred(const InetAddress &addr)
-	{
-		if (addr.ss_family == AF_INET)
-			_v4ClusterPreferred = addr;
-		else if (addr.ss_family == AF_INET6)
-			_v6ClusterPreferred = addr;
-	}
-
-	/**
-	 * Fill parameters with V4 and V6 addresses if known and alive
-	 *
-	 * @param now Current time
-	 * @param v4 Result parameter to receive active IPv4 address, if any
-	 * @param v6 Result parameter to receive active IPv6 address, if any
-	 */
-	inline void getRendezvousAddresses(uint64_t now,InetAddress &v4,InetAddress &v6) const
-	{
-		Mutex::Lock _l(_paths_m);
-		if (((now - _v4Path.lr) < ZT_PEER_PATH_EXPIRATION)&&(_v4Path.p->alive(now)))
-			v4 = _v4Path.p->address();
-		if (((now - _v6Path.lr) < ZT_PEER_PATH_EXPIRATION)&&(_v6Path.p->alive(now)))
-			v6 = _v6Path.p->address();
-	}
+	void resetWithinScope(void *tPtr,InetAddress::IpScope scope,int inetAddressFamily,int64_t now);
 
 	/**
 	 * @param now Current time
 	 * @return All known paths to this peer
 	 */
-	inline std::vector< SharedPtr<Path> > paths(const uint64_t now) const
+	inline std::vector< SharedPtr<Path> > paths(const int64_t now) const
 	{
 		std::vector< SharedPtr<Path> > pp;
 		Mutex::Lock _l(_paths_m);
-		if (((now - _v4Path.lr) < ZT_PEER_PATH_EXPIRATION)&&(_v4Path.p->alive(now)))
-			pp.push_back(_v4Path.p);
-		if (((now - _v6Path.lr) < ZT_PEER_PATH_EXPIRATION)&&(_v6Path.p->alive(now)))
-			pp.push_back(_v6Path.p);
+		for(unsigned int i=0;i<ZT_MAX_PEER_NETWORK_PATHS;++i) {
+			if (!_paths[i].p) break;
+			pp.push_back(_paths[i].p);
+		}
 		return pp;
 	}
 
 	/**
 	 * @return Time of last receive of anything, whether direct or relayed
 	 */
-	inline uint64_t lastReceive() const { return _lastReceive; }
+	inline int64_t lastReceive() const { return _lastReceive; }
 
 	/**
 	 * @return True if we've heard from this peer in less than ZT_PEER_ACTIVITY_TIMEOUT
 	 */
-	inline bool isAlive(const uint64_t now) const { return ((now - _lastReceive) < ZT_PEER_ACTIVITY_TIMEOUT); }
+	inline bool isAlive(const int64_t now) const { return ((now - _lastReceive) < ZT_PEER_ACTIVITY_TIMEOUT); }
 
 	/**
 	 * @return True if this peer has sent us real network traffic recently
 	 */
-	inline uint64_t isActive(uint64_t now) const { return ((now - _lastNontrivialReceive) < ZT_PEER_ACTIVITY_TIMEOUT); }
+	inline int64_t isActive(int64_t now) const { return ((now - _lastNontrivialReceive) < ZT_PEER_ACTIVITY_TIMEOUT); }
 
 	/**
-	 * @return Latency in milliseconds or 0 if unknown
+	 * @return Latency in milliseconds of best/aggregate path or 0xffff if unknown / no paths
 	 */
-	inline unsigned int latency() const { return _latency; }
+	inline unsigned int latency(const int64_t now)
+	{
+		if (_canUseMultipath) {
+			return (int)computeAggregateLinkMeanLatency();
+		} else {
+			SharedPtr<Path> bp(getAppropriatePath(now,false));
+			if (bp)
+				return bp->latency();
+			return 0xffff;
+		}
+	}
 
 	/**
 	 * This computes a quality score for relays and root servers
@@ -285,41 +374,16 @@ public:
 	 *
 	 * @return Relay quality score computed from latency and other factors, lower is better
 	 */
-	inline unsigned int relayQuality(const uint64_t now) const
+	inline unsigned int relayQuality(const int64_t now)
 	{
 		const uint64_t tsr = now - _lastReceive;
 		if (tsr >= ZT_PEER_ACTIVITY_TIMEOUT)
 			return (~(unsigned int)0);
-		unsigned int l = _latency;
+		unsigned int l = latency(now);
 		if (!l)
 			l = 0xffff;
 		return (l * (((unsigned int)tsr / (ZT_PEER_PING_PERIOD + 1000)) + 1));
 	}
-
-	/**
-	 * Update latency with a new direct measurment
-	 *
-	 * @param l Direct latency measurment in ms
-	 */
-	inline void addDirectLatencyMeasurment(unsigned int l)
-	{
-		unsigned int ol = _latency;
-		if ((ol > 0)&&(ol < 10000))
-			_latency = (ol + std::min(l,(unsigned int)65535)) / 2;
-		else _latency = std::min(l,(unsigned int)65535);
-	}
-
-#ifdef ZT_ENABLE_CLUSTER
-	/**
-	 * @param now Current time
-	 * @return True if this peer has at least one active direct path that is not cluster-suboptimal
-	 */
-	inline bool hasLocalClusterOptimalPath(uint64_t now) const
-	{
-		Mutex::Lock _l(_paths_m);
-		return ( ((_v4Path.p)&&(_v4Path.p->alive(now))&&(!_v4Path.localClusterSuboptimal)) || ((_v6Path.p)&&(_v6Path.p->alive(now))&&(!_v6Path.localClusterSuboptimal)) );
-	}
-#endif
 
 	/**
 	 * @return 256-bit secret symmetric encryption key
@@ -350,14 +414,45 @@ public:
 	inline bool remoteVersionKnown() const { return ((_vMajor > 0)||(_vMinor > 0)||(_vRevision > 0)); }
 
 	/**
+	 * Periodically update known multipath activation constraints. This is done so that we know when and when
+	 * not to use multipath logic. Doing this once every few seconds is sufficient.
+	 *
+	 * @param now Current time
+	 */
+	inline void processBackgroundPeerTasks(const int64_t now);
+
+	/**
+	 * Record that the remote peer does have multipath enabled. As is evident by the receipt of a VERB_ACK
+	 * or a VERB_QOS_MEASUREMENT packet at some point in the past. Until this flag is set, the local client
+	 * shall assume that multipath is not enabled and should only use classical Protocol 9 logic.
+	 */
+	inline void inferRemoteMultipathEnabled() { _remotePeerMultipathEnabled = true; }
+
+	/**
+	 * @return Whether the local client supports and is configured to use multipath
+	 */
+	inline bool localMultipathSupport() { return _localMultipathSupported; }
+
+	/**
+	 * @return Whether the remote peer supports and is configured to use multipath
+	 */
+	inline bool remoteMultipathSupport() { return _remoteMultipathSupported; }
+
+	/**
+	 * @return Whether this client can use multipath to communicate with this peer. True if both peers are using
+	 * the correct protocol and if both peers have multipath enabled. False if otherwise.
+	 */
+	inline bool canUseMultipath() { return _canUseMultipath; }
+
+	/**
 	 * @return True if peer has received a trust established packet (e.g. common network membership) in the past ZT_TRUST_EXPIRATION ms
 	 */
-	inline bool trustEstablished(const uint64_t now) const { return ((now - _lastTrustEstablishedPacketReceived) < ZT_TRUST_EXPIRATION); }
+	inline bool trustEstablished(const int64_t now) const { return ((now - _lastTrustEstablishedPacketReceived) < ZT_TRUST_EXPIRATION); }
 
 	/**
 	 * Rate limit gate for VERB_PUSH_DIRECT_PATHS
 	 */
-	inline bool rateGatePushDirectPaths(const uint64_t now)
+	inline bool rateGatePushDirectPaths(const int64_t now)
 	{
 		if ((now - _lastDirectPathPushReceive) <= ZT_PUSH_DIRECT_PATHS_CUTOFF_TIME)
 			++_directPathPushCutoffCount;
@@ -369,7 +464,7 @@ public:
 	/**
 	 * Rate limit gate for VERB_NETWORK_CREDENTIALS
 	 */
-	inline bool rateGateCredentialsReceived(const uint64_t now)
+	inline bool rateGateCredentialsReceived(const int64_t now)
 	{
 		if ((now - _lastCredentialsReceived) <= ZT_PEER_CREDENTIALS_CUTOFF_TIME)
 			++_credentialsCutoffCount;
@@ -381,7 +476,7 @@ public:
 	/**
 	 * Rate limit gate for sending of ERROR_NEED_MEMBERSHIP_CERTIFICATE
 	 */
-	inline bool rateGateRequestCredentials(const uint64_t now)
+	inline bool rateGateRequestCredentials(const int64_t now)
 	{
 		if ((now - _lastCredentialRequestSent) >= ZT_PEER_GENERAL_RATE_LIMIT) {
 			_lastCredentialRequestSent = now;
@@ -393,7 +488,7 @@ public:
 	/**
 	 * Rate limit gate for inbound WHOIS requests
 	 */
-	inline bool rateGateInboundWhoisRequest(const uint64_t now)
+	inline bool rateGateInboundWhoisRequest(const int64_t now)
 	{
 		if ((now - _lastWhoisRequestReceived) >= ZT_PEER_WHOIS_RATE_LIMIT) {
 			_lastWhoisRequestReceived = now;
@@ -405,7 +500,7 @@ public:
 	/**
 	 * Rate limit gate for inbound ECHO requests
 	 */
-	inline bool rateGateEchoRequest(const uint64_t now)
+	inline bool rateGateEchoRequest(const int64_t now)
 	{
 		if ((now - _lastEchoRequestReceived) >= ZT_PEER_GENERAL_RATE_LIMIT) {
 			_lastEchoRequestReceived = now;
@@ -415,80 +510,176 @@ public:
 	}
 
 	/**
-	 * Rate gate incoming requests for network COM
+	 * Rate limit gate for VERB_ACK
 	 */
-	inline bool rateGateIncomingComRequest(const uint64_t now)
+	inline bool rateGateACK(const int64_t now)
 	{
-		if ((now - _lastComRequestReceived) >= ZT_PEER_GENERAL_RATE_LIMIT) {
-			_lastComRequestReceived = now;
-			return true;
+		if ((now - _lastACKWindowReset) >= ZT_PATH_QOS_ACK_CUTOFF_TIME) {
+			_lastACKWindowReset = now;
+			_ACKCutoffCount = 0;
+		} else {
+			++_ACKCutoffCount;
 		}
-		return false;
+		return (_ACKCutoffCount < ZT_PATH_QOS_ACK_CUTOFF_LIMIT);
 	}
 
 	/**
-	 * Rate gate outgoing requests for network COM
+	 * Rate limit gate for VERB_QOS_MEASUREMENT
 	 */
-	inline bool rateGateOutgoingComRequest(const uint64_t now)
+	inline bool rateGateQoS(const int64_t now)
 	{
-		if ((now - _lastComRequestSent) >= ZT_PEER_GENERAL_RATE_LIMIT) {
-			_lastComRequestSent = now;
-			return true;
+		if ((now - _lastQoSWindowReset) >= ZT_PATH_QOS_ACK_CUTOFF_TIME) {
+			_lastQoSWindowReset = now;
+			_QoSCutoffCount = 0;
+		} else {
+			++_QoSCutoffCount;
 		}
-		return false;
+		return (_QoSCutoffCount < ZT_PATH_QOS_ACK_CUTOFF_LIMIT);
+	}
+
+	/**
+	 * @return Whether this peer is reachable via an aggregate link
+	 */
+	inline bool hasAggregateLink() {
+		return _localMultipathSupported && _remoteMultipathSupported && _remotePeerMultipathEnabled;
+	}
+
+	/**
+	 * Serialize a peer for storage in local cache
+	 *
+	 * This does not serialize everything, just non-ephemeral information.
+	 */
+	template<unsigned int C>
+	inline void serializeForCache(Buffer<C> &b) const
+	{
+		b.append((uint8_t)1);
+
+		_id.serialize(b);
+
+		b.append((uint16_t)_vProto);
+		b.append((uint16_t)_vMajor);
+		b.append((uint16_t)_vMinor);
+		b.append((uint16_t)_vRevision);
+
+		{
+			Mutex::Lock _l(_paths_m);
+			unsigned int pc = 0;
+			for(unsigned int i=0;i<ZT_MAX_PEER_NETWORK_PATHS;++i) {
+				if (_paths[i].p)
+					++pc;
+				else break;
+			}
+			b.append((uint16_t)pc);
+			for(unsigned int i=0;i<pc;++i)
+				_paths[i].p->address().serialize(b);
+		}
+	}
+
+	template<unsigned int C>
+	inline static SharedPtr<Peer> deserializeFromCache(int64_t now,void *tPtr,Buffer<C> &b,const RuntimeEnvironment *renv)
+	{
+		try {
+			unsigned int ptr = 0;
+			if (b[ptr++] != 1)
+				return SharedPtr<Peer>();
+
+			Identity id;
+			ptr += id.deserialize(b,ptr);
+			if (!id)
+				return SharedPtr<Peer>();
+
+			SharedPtr<Peer> p(new Peer(renv,renv->identity,id));
+
+			p->_vProto = b.template at<uint16_t>(ptr); ptr += 2;
+			p->_vMajor = b.template at<uint16_t>(ptr); ptr += 2;
+			p->_vMinor = b.template at<uint16_t>(ptr); ptr += 2;
+			p->_vRevision = b.template at<uint16_t>(ptr); ptr += 2;
+
+			// When we deserialize from the cache we don't actually restore paths. We
+			// just try them and then re-learn them if they happen to still be up.
+			// Paths are fairly ephemeral in the real world in most cases.
+			const unsigned int tryPathCount = b.template at<uint16_t>(ptr); ptr += 2;
+			for(unsigned int i=0;i<tryPathCount;++i) {
+				InetAddress inaddr;
+				try {
+					ptr += inaddr.deserialize(b,ptr);
+					if (inaddr)
+						p->attemptToContactAt(tPtr,-1,inaddr,now,true);
+				} catch ( ... ) {
+					break;
+				}
+			}
+
+			return p;
+		} catch ( ... ) {
+			return SharedPtr<Peer>();
+		}
 	}
 
 private:
 	struct _PeerPath
 	{
-#ifdef ZT_ENABLE_CLUSTER
-		_PeerPath() : lr(0),p(),localClusterSuboptimal(false) {}
-#else
-		_PeerPath() : lr(0),p() {}
-#endif
-		uint64_t lr; // time of last valid ZeroTier packet
+		_PeerPath() : lr(0),p(),priority(1) {}
+		int64_t lr; // time of last valid ZeroTier packet
 		SharedPtr<Path> p;
-#ifdef ZT_ENABLE_CLUSTER
-		bool localClusterSuboptimal; // true if our cluster has determined that we should not be serving this peer
-#endif
+		long priority; // >= 1, higher is better
 	};
 
 	uint8_t _key[ZT_PEER_SECRET_KEY_LENGTH];
 
 	const RuntimeEnvironment *RR;
 
-	uint64_t _lastReceive; // direct or indirect
-	uint64_t _lastNontrivialReceive; // frames, things like netconf, etc.
-	uint64_t _lastTriedMemorizedPath;
-	uint64_t _lastDirectPathPushSent;
-	uint64_t _lastDirectPathPushReceive;
-	uint64_t _lastCredentialRequestSent;
-	uint64_t _lastWhoisRequestReceived;
-	uint64_t _lastEchoRequestReceived;
-	uint64_t _lastComRequestReceived;
-	uint64_t _lastComRequestSent;
-	uint64_t _lastCredentialsReceived;
-	uint64_t _lastTrustEstablishedPacketReceived;
+	int64_t _lastReceive; // direct or indirect
+	int64_t _lastNontrivialReceive; // frames, things like netconf, etc.
+	int64_t _lastTriedMemorizedPath;
+	int64_t _lastDirectPathPushSent;
+	int64_t _lastDirectPathPushReceive;
+	int64_t _lastCredentialRequestSent;
+	int64_t _lastWhoisRequestReceived;
+	int64_t _lastEchoRequestReceived;
+	int64_t _lastCredentialsReceived;
+	int64_t _lastTrustEstablishedPacketReceived;
+	int64_t _lastSentFullHello;
+	int64_t _lastPathPrune;
+	int64_t _lastACKWindowReset;
+	int64_t _lastQoSWindowReset;
+	int64_t _lastMultipathCompatibilityCheck;
+
+	unsigned char _freeRandomByte;
+
+	int _uniqueAlivePathCount;
+
+	bool _localMultipathSupported;
+	bool _remoteMultipathSupported;
+	bool _canUseMultipath;
 
 	uint16_t _vProto;
 	uint16_t _vMajor;
 	uint16_t _vMinor;
 	uint16_t _vRevision;
 
-	InetAddress _v4ClusterPreferred;
-	InetAddress _v6ClusterPreferred;
-
-	_PeerPath _v4Path; // IPv4 direct path
-	_PeerPath _v6Path; // IPv6 direct path
+	_PeerPath _paths[ZT_MAX_PEER_NETWORK_PATHS];
 	Mutex _paths_m;
 
 	Identity _id;
 
-	unsigned int _latency;
 	unsigned int _directPathPushCutoffCount;
 	unsigned int _credentialsCutoffCount;
+	unsigned int _QoSCutoffCount;
+	unsigned int _ACKCutoffCount;
 
 	AtomicCounter __refCount;
+
+	RingBuffer<int,ZT_MULTIPATH_PROPORTION_WIN_SZ> _pathChoiceHist;
+
+	bool _linkIsBalanced;
+	bool _linkIsRedundant;
+	bool _remotePeerMultipathEnabled;
+
+	int64_t _lastAggregateStatsReport;
+	int64_t _lastAggregateAllocation;
+
+	char _interfaceListStr[256]; // 16 characters * 16 paths in a link
 };
 
 } // namespace ZeroTier

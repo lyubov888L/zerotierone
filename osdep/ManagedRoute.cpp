@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #include "../node/Constants.hpp"
@@ -38,7 +46,9 @@
 #include <sys/wait.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#ifndef ZT_SDK
 #include <net/route.h>
+#endif
 #include <net/if.h>
 #ifdef __BSD__
 #include <net/if_dl.h>
@@ -101,6 +111,7 @@ struct _RTE
 #ifdef __BSD__ // ------------------------------------------------------------
 #define ZT_ROUTING_SUPPORT_FOUND 1
 
+#ifndef ZT_SDK
 static std::vector<_RTE> _getRTEs(const InetAddress &target,bool contains)
 {
 	std::vector<_RTE> rtes;
@@ -235,10 +246,11 @@ static std::vector<_RTE> _getRTEs(const InetAddress &target,bool contains)
 
 	return rtes;
 }
+#endif
 
 static void _routeCmd(const char *op,const InetAddress &target,const InetAddress &via,const char *ifscope,const char *localInterface)
 {
-	//printf("route %s %s %s %s %s\n",op,target.toString().c_str(),(via) ? via.toString().c_str() : "(null)",(ifscope) ? ifscope : "(null)",(localInterface) ? localInterface : "(null)");
+	//char f1[1024],f2[1024]; printf("%s %s %s %s %s\n",op,target.toString(f1),via.toString(f2),ifscope,localInterface);
 	long p = (long)fork();
 	if (p > 0) {
 		int exitcode = -1;
@@ -246,17 +258,19 @@ static void _routeCmd(const char *op,const InetAddress &target,const InetAddress
 	} else if (p == 0) {
 		::close(STDOUT_FILENO);
 		::close(STDERR_FILENO);
+		char ttmp[64];
+		char iptmp[64];
 		if (via) {
 			if ((ifscope)&&(ifscope[0])) {
-				::execl(ZT_BSD_ROUTE_CMD,ZT_BSD_ROUTE_CMD,op,"-ifscope",ifscope,((target.ss_family == AF_INET6) ? "-inet6" : "-inet"),target.toString().c_str(),via.toIpString().c_str(),(const char *)0);
+				::execl(ZT_BSD_ROUTE_CMD,ZT_BSD_ROUTE_CMD,op,"-ifscope",ifscope,((target.ss_family == AF_INET6) ? "-inet6" : "-inet"),target.toString(ttmp),via.toIpString(iptmp),(const char *)0);
 			} else {
-				::execl(ZT_BSD_ROUTE_CMD,ZT_BSD_ROUTE_CMD,op,((target.ss_family == AF_INET6) ? "-inet6" : "-inet"),target.toString().c_str(),via.toIpString().c_str(),(const char *)0);
+				::execl(ZT_BSD_ROUTE_CMD,ZT_BSD_ROUTE_CMD,op,((target.ss_family == AF_INET6) ? "-inet6" : "-inet"),target.toString(ttmp),via.toIpString(iptmp),(const char *)0);
 			}
 		} else if ((localInterface)&&(localInterface[0])) {
 			if ((ifscope)&&(ifscope[0])) {
-				::execl(ZT_BSD_ROUTE_CMD,ZT_BSD_ROUTE_CMD,op,"-ifscope",ifscope,((target.ss_family == AF_INET6) ? "-inet6" : "-inet"),target.toString().c_str(),"-interface",localInterface,(const char *)0);
+				::execl(ZT_BSD_ROUTE_CMD,ZT_BSD_ROUTE_CMD,op,"-ifscope",ifscope,((target.ss_family == AF_INET6) ? "-inet6" : "-inet"),target.toString(ttmp),"-interface",localInterface,(const char *)0);
 			} else {
-				::execl(ZT_BSD_ROUTE_CMD,ZT_BSD_ROUTE_CMD,op,((target.ss_family == AF_INET6) ? "-inet6" : "-inet"),target.toString().c_str(),"-interface",localInterface,(const char *)0);
+				::execl(ZT_BSD_ROUTE_CMD,ZT_BSD_ROUTE_CMD,op,((target.ss_family == AF_INET6) ? "-inet6" : "-inet"),target.toString(ttmp),"-interface",localInterface,(const char *)0);
 			}
 		}
 		::_exit(-1);
@@ -277,12 +291,13 @@ static void _routeCmd(const char *op,const InetAddress &target,const InetAddress
 	} else if (p == 0) {
 		::close(STDOUT_FILENO);
 		::close(STDERR_FILENO);
+		char ipbuf[64],ipbuf2[64];
 		if (via) {
-			::execl(ZT_LINUX_IP_COMMAND,ZT_LINUX_IP_COMMAND,(target.ss_family == AF_INET6) ? "-6" : "-4","route",op,target.toString().c_str(),"via",via.toIpString().c_str(),(const char *)0);
-			::execl(ZT_LINUX_IP_COMMAND_2,ZT_LINUX_IP_COMMAND_2,(target.ss_family == AF_INET6) ? "-6" : "-4","route",op,target.toString().c_str(),"via",via.toIpString().c_str(),(const char *)0);
+			::execl(ZT_LINUX_IP_COMMAND,ZT_LINUX_IP_COMMAND,(target.ss_family == AF_INET6) ? "-6" : "-4","route",op,target.toString(ipbuf),"via",via.toIpString(ipbuf2),(const char *)0);
+			::execl(ZT_LINUX_IP_COMMAND_2,ZT_LINUX_IP_COMMAND_2,(target.ss_family == AF_INET6) ? "-6" : "-4","route",op,target.toString(ipbuf),"via",via.toIpString(ipbuf2),(const char *)0);
 		} else if ((localInterface)&&(localInterface[0])) {
-			::execl(ZT_LINUX_IP_COMMAND,ZT_LINUX_IP_COMMAND,(target.ss_family == AF_INET6) ? "-6" : "-4","route",op,target.toString().c_str(),"dev",localInterface,(const char *)0);
-			::execl(ZT_LINUX_IP_COMMAND_2,ZT_LINUX_IP_COMMAND_2,(target.ss_family == AF_INET6) ? "-6" : "-4","route",op,target.toString().c_str(),"dev",localInterface,(const char *)0);
+			::execl(ZT_LINUX_IP_COMMAND,ZT_LINUX_IP_COMMAND,(target.ss_family == AF_INET6) ? "-6" : "-4","route",op,target.toString(ipbuf),"dev",localInterface,(const char *)0);
+			::execl(ZT_LINUX_IP_COMMAND_2,ZT_LINUX_IP_COMMAND_2,(target.ss_family == AF_INET6) ? "-6" : "-4","route",op,target.toString(ipbuf),"dev",localInterface,(const char *)0);
 		}
 		::_exit(-1);
 	}
@@ -398,6 +413,7 @@ static bool _winHasRoute(const NET_LUID &interfaceLuid, const NET_IFINDEX &inter
  * Linux default route override implies asymmetric routes, which then
  * trigger Linux's "martian packet" filter. */
 
+#ifndef ZT_SDK
 bool ManagedRoute::sync()
 {
 #ifdef __WINDOWS__
@@ -508,6 +524,7 @@ bool ManagedRoute::sync()
 
 	return true;
 }
+#endif
 
 void ManagedRoute::remove()
 {

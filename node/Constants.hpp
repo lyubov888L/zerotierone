@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_CONSTANTS_HPP
@@ -52,6 +60,8 @@
 #endif
 
 #ifdef __APPLE__
+#define likely(x) __builtin_expect((x),1)
+#define unlikely(x) __builtin_expect((x),0)
 #include <TargetConditionals.h>
 #ifndef __UNIX_LIKE__
 #define __UNIX_LIKE__
@@ -62,15 +72,7 @@
 #include <machine/endian.h>
 #endif
 
-// Defined this macro to disable "type punning" on a number of targets that
-// have issues with unaligned memory access.
-#if defined(__arm__) || defined(__ARMEL__) || (defined(__APPLE__) && ( (defined(TARGET_OS_IPHONE) && (TARGET_OS_IPHONE != 0)) || (defined(TARGET_OS_WATCH) && (TARGET_OS_WATCH != 0)) || (defined(TARGET_IPHONE_SIMULATOR) && (TARGET_IPHONE_SIMULATOR != 0)) ) )
-#ifndef ZT_NO_TYPE_PUNNING
-#define ZT_NO_TYPE_PUNNING
-#endif
-#endif
-
-#if defined(__FreeBSD__) || defined(__OpenBSD__)
+#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #ifndef __UNIX_LIKE__
 #define __UNIX_LIKE__
 #endif
@@ -97,11 +99,21 @@
 #pragma warning(disable : 4101)
 #undef __UNIX_LIKE__
 #undef __BSD__
-#define ZT_PATH_SEPARATOR '\\'
-#define ZT_PATH_SEPARATOR_S "\\"
-#define ZT_EOL_S "\r\n"
 #include <WinSock2.h>
 #include <Windows.h>
+#endif
+
+#ifdef __NetBSD__
+#ifndef RTF_MULTICAST
+#define RTF_MULTICAST   0x20000000
+#endif
+#endif
+
+// Define ZT_NO_TYPE_PUNNING to disable reckless casts on anything other than x86/x64.
+#if (!(defined(__amd64__) || defined(__amd64) || defined(__x86_64__) || defined(__x86_64) || defined(_M_AMD64) || defined(_M_X64) || defined(i386) || defined(__i386) || defined(__i386__) || defined(__i486__) || defined(__i586__) || defined(__i686__) || defined(_M_IX86) || defined(__X86__) || defined(_X86_) || defined(__I86__) || defined(__INTEL__) || defined(__386)))
+#ifndef ZT_NO_TYPE_PUNNING
+#define ZT_NO_TYPE_PUNNING
+#endif
 #endif
 
 // Assume little endian if not defined
@@ -114,7 +126,11 @@
 #define __BYTE_ORDER 1234
 #endif
 
-#ifdef __UNIX_LIKE__
+#ifdef __WINDOWS__
+#define ZT_PATH_SEPARATOR '\\'
+#define ZT_PATH_SEPARATOR_S "\\"
+#define ZT_EOL_S "\r\n"
+#else
 #define ZT_PATH_SEPARATOR '/'
 #define ZT_PATH_SEPARATOR_S "/"
 #define ZT_EOL_S "\n"
@@ -122,6 +138,28 @@
 
 #ifndef __BYTE_ORDER
 #include <endian.h>
+#endif
+
+#if (defined(__GNUC__) && (__GNUC__ >= 3)) || (defined(__INTEL_COMPILER) && (__INTEL_COMPILER >= 800)) || defined(__clang__)
+#ifndef likely
+#define likely(x) __builtin_expect((x),1)
+#endif
+#ifndef unlikely
+#define unlikely(x) __builtin_expect((x),0)
+#endif
+#else
+#ifndef likely
+#define likely(x) (x)
+#endif
+#ifndef unlikely
+#define unlikely(x) (x)
+#endif
+#endif
+
+#ifdef __WINDOWS__
+#define ZT_PACKED_STRUCT(D) __pragma(pack(push,1)) D __pragma(pack(pop))
+#else
+#define ZT_PACKED_STRUCT(D) D __attribute__((packed))
 #endif
 
 /**
@@ -140,39 +178,24 @@
 #define ZT_ADDRESS_RESERVED_PREFIX 0xff
 
 /**
- * Default payload MTU for UDP packets
- *
- * In the future we might support UDP path MTU discovery, but for now we
- * set a maximum that is equal to 1500 minus 8 (for PPPoE overhead, common
- * in some markets) minus 48 (IPv6 UDP overhead).
- */
-#define ZT_UDP_DEFAULT_PAYLOAD_MTU 1444
-
-/**
  * Default MTU used for Ethernet tap device
  */
-#define ZT_IF_MTU ZT_MAX_MTU
+#define ZT_DEFAULT_MTU 2800
 
 /**
- * Maximum number of packet fragments we'll support
- *
- * The actual spec allows 16, but this is the most we'll support right
- * now. Packets with more than this many fragments are dropped.
+ * Maximum number of packet fragments we'll support (protocol max: 16)
  */
-#define ZT_MAX_PACKET_FRAGMENTS 4
+#define ZT_MAX_PACKET_FRAGMENTS 7
 
 /**
  * Size of RX queue
- *
- * This is about 2mb, and can be decreased for small devices. A queue smaller
- * than about 4 is probably going to cause a lot of lost packets.
  */
-#define ZT_RX_QUEUE_SIZE 64
+#define ZT_RX_QUEUE_SIZE 32
 
 /**
- * RX queue entries older than this do not "exist"
+ * Size of TX queue
  */
-#define ZT_RX_QUEUE_EXPIRE 4000
+#define ZT_TX_QUEUE_SIZE 32
 
 /**
  * Length of secret key in bytes -- 256-bit -- do not change
@@ -187,37 +210,22 @@
 /**
  * How often Topology::clean() and Network::clean() and similar are called, in ms
  */
-#define ZT_HOUSEKEEPING_PERIOD 120000
-
-/**
- * How long to remember peer records in RAM if they haven't been used
- */
-#define ZT_PEER_IN_MEMORY_EXPIRATION 600000
+#define ZT_HOUSEKEEPING_PERIOD 60000
 
 /**
  * Delay between WHOIS retries in ms
  */
-#define ZT_WHOIS_RETRY_DELAY 1000
-
-/**
- * Maximum identity WHOIS retries (each attempt tries consulting a different peer)
- */
-#define ZT_MAX_WHOIS_RETRIES 4
+#define ZT_WHOIS_RETRY_DELAY 500
 
 /**
  * Transmit queue entry timeout
  */
-#define ZT_TRANSMIT_QUEUE_TIMEOUT (ZT_WHOIS_RETRY_DELAY * (ZT_MAX_WHOIS_RETRIES + 1))
+#define ZT_TRANSMIT_QUEUE_TIMEOUT 5000
 
 /**
  * Receive queue entry timeout
  */
-#define ZT_RECEIVE_QUEUE_TIMEOUT (ZT_WHOIS_RETRY_DELAY * (ZT_MAX_WHOIS_RETRIES + 1))
-
-/**
- * Maximum latency to allow for OK(HELLO) before packet is discarded
- */
-#define ZT_HELLO_MAX_ALLOWABLE_LATENCY 60000
+#define ZT_RECEIVE_QUEUE_TIMEOUT 5000
 
 /**
  * Maximum number of ZT hops allowed (this is not IP hops/TTL)
@@ -225,11 +233,6 @@
  * The protocol allows up to 7, but we limit it to something smaller.
  */
 #define ZT_RELAY_MAX_HOPS 3
-
-/**
- * Maximum number of upstreams to use (far more than we should ever need)
- */
-#define ZT_MAX_UPSTREAMS 64
 
 /**
  * Expire time for multicast 'likes' and indirect multicast memberships in ms
@@ -247,11 +250,6 @@
 #define ZT_MULTICAST_EXPLICIT_GATHER_DELAY (ZT_MULTICAST_LIKE_EXPIRE / 10)
 
 /**
- * Expiration for credentials presented for MULTICAST_LIKE or MULTICAST_GATHER (for non-network-members)
- */
-#define ZT_MULTICAST_CREDENTIAL_EXPIRATON ZT_MULTICAST_LIKE_EXPIRE
-
-/**
  * Timeout for outgoing multicasts
  *
  * This is how long we wait for explicit or implicit gather results.
@@ -264,19 +262,192 @@
 #define ZT_PING_CHECK_INVERVAL 5000
 
 /**
+ * How often the local.conf file is checked for changes (service, should be moved there)
+ */
+#define ZT_LOCAL_CONF_FILE_CHECK_INTERVAL 10000
+
+/**
+ * How frequently to check for changes to the system's network interfaces. When
+ * the service decides to use this constant it's because we want to react more
+ * quickly to new interfaces that pop up or go down.
+ */
+#define ZT_MULTIPATH_BINDER_REFRESH_PERIOD 5000
+
+/**
+ * Packets are only used for QoS/ACK statistical sampling if their packet ID is divisible by
+ * this integer. This is to provide a mechanism for both peers to agree on which packets need
+ * special treatment without having to exchange information. Changing this value would be
+ * a breaking change and would necessitate a protocol version upgrade. Since each incoming and
+ * outgoing packet ID is checked against this value its evaluation is of the form:
+ * (id & (divisor - 1)) == 0, thus the divisor must be a power of 2.
+ *
+ * This value is set at (16) so that given a normally-distributed RNG output we will sample
+ * 1/16th (or ~6.25%) of packets.
+ */
+#define ZT_PATH_QOS_ACK_PROTOCOL_DIVISOR 0x10
+
+/**
+ * Time horizon for VERB_QOS_MEASUREMENT and VERB_ACK packet processing cutoff
+ */
+#define ZT_PATH_QOS_ACK_CUTOFF_TIME 30000
+
+/**
+ * Maximum number of VERB_QOS_MEASUREMENT and VERB_ACK packets allowed to be
+ * processed within cutoff time. Separate totals are kept for each type but
+ * the limit is the same for both.
+ *
+ * This limits how often this peer will compute statistical estimates
+ * of various QoS measures from a VERB_QOS_MEASUREMENT or VERB_ACK packets to
+ * CUTOFF_LIMIT times per CUTOFF_TIME milliseconds per peer to prevent
+ * this from being useful for DOS amplification attacks.
+ */
+#define ZT_PATH_QOS_ACK_CUTOFF_LIMIT 128
+
+/**
+ * Path choice history window size. This is used to keep track of which paths were
+ * previously selected so that we can maintain a target allocation over time.
+ */
+#define ZT_MULTIPATH_PROPORTION_WIN_SZ 128
+
+/**
+ * How often we will sample packet latency. Should be at least greater than ZT_PING_CHECK_INVERVAL
+ * since we will record a 0 bit/s measurement if no valid latency measurement was made within this
+ * window of time.
+ */
+#define ZT_PATH_LATENCY_SAMPLE_INTERVAL (ZT_MULTIPATH_PEER_PING_PERIOD * 2)
+
+/**
+ * Interval used for rate-limiting the computation of path quality estimates.
+ */
+#define ZT_PATH_QUALITY_COMPUTE_INTERVAL 1000
+
+/**
+ * Number of samples to consider when computing real-time path statistics
+ */
+#define ZT_PATH_QUALITY_METRIC_REALTIME_CONSIDERATION_WIN_SZ 128
+
+/**
+ * Number of samples to consider when computing performing long-term path quality analysis.
+ * By default this value is set to ZT_PATH_QUALITY_METRIC_REALTIME_CONSIDERATION_WIN_SZ but can
+ * be set to any value greater than that to observe longer-term path quality behavior.
+ */
+#define ZT_PATH_QUALITY_METRIC_WIN_SZ ZT_PATH_QUALITY_METRIC_REALTIME_CONSIDERATION_WIN_SZ
+
+/**
+ * Maximum acceptable Packet Delay Variance (PDV) over a path
+ */
+#define ZT_PATH_MAX_PDV 1000
+
+/**
+ * Maximum acceptable time interval between expectation and receipt of at least one ACK over a path
+ */
+#define ZT_PATH_MAX_AGE 30000
+
+/**
+ * Maximum acceptable mean latency over a path
+ */
+#define ZT_PATH_MAX_MEAN_LATENCY 1000
+
+/**
+ * How much each factor contributes to the "stability" score of a path
+ */
+#define ZT_PATH_CONTRIB_PDV                    (1.0 / 3.0)
+#define ZT_PATH_CONTRIB_LATENCY                (1.0 / 3.0)
+#define ZT_PATH_CONTRIB_THROUGHPUT_DISTURBANCE (1.0 / 3.0)
+
+/**
+ * How much each factor contributes to the "quality" score of a path
+ */
+#define ZT_PATH_CONTRIB_STABILITY  (0.75 / 3.0)
+#define ZT_PATH_CONTRIB_THROUGHPUT (1.50 / 3.0)
+#define ZT_PATH_CONTRIB_SCOPE      (0.75 / 3.0)
+
+/**
+ * How often a QoS packet is sent
+ */
+#define ZT_PATH_QOS_INTERVAL 3000
+
+/**
+ * Min and max acceptable sizes for a VERB_QOS_MEASUREMENT packet
+ */
+#define ZT_PATH_MIN_QOS_PACKET_SZ 8 + 1
+#define ZT_PATH_MAX_QOS_PACKET_SZ 1400
+
+/**
+ * How many ID:sojourn time pairs in a single QoS packet
+ */
+#define ZT_PATH_QOS_TABLE_SIZE ((ZT_PATH_MAX_QOS_PACKET_SZ * 8) / (64 + 16))
+
+/**
+ * Maximum number of outgoing packets we monitor for QoS information
+ */
+#define ZT_PATH_MAX_OUTSTANDING_QOS_RECORDS 128
+
+/**
+ * Timeout for QoS records
+ */
+#define ZT_PATH_QOS_TIMEOUT (ZT_PATH_QOS_INTERVAL * 2)
+
+/**
+ * How often the service tests the path throughput
+ */
+#define ZT_PATH_THROUGHPUT_MEASUREMENT_INTERVAL (ZT_PATH_ACK_INTERVAL * 8)
+
+/**
+ * Minimum amount of time between each ACK packet
+ */
+#define ZT_PATH_ACK_INTERVAL 1000
+
+/**
+ * How often an aggregate link statistics report is emitted into this tracing system
+ */
+#define ZT_PATH_AGGREGATE_STATS_REPORT_INTERVAL 60000
+
+/**
+ * How much an aggregate link's component paths can vary from their target allocation
+ * before the link is considered to be in a state of imbalance.
+ */
+#define ZT_PATH_IMBALANCE_THRESHOLD 0.20
+
+/**
+ * Max allowable time spent in any queue
+ */
+#define ZT_QOS_TARGET 5 // ms
+
+/**
+ * Time period where the time spent in the queue by a packet should fall below
+ * target at least once
+ */
+#define ZT_QOS_INTERVAL 100 // ms
+
+/**
+ * The number of bytes that each queue is allowed to send during each DRR cycle.
+ * This approximates a single-byte-based fairness queuing scheme
+ */
+#define ZT_QOS_QUANTUM ZT_DEFAULT_MTU
+
+/**
+ * The maximum total number of packets that can be queued among all
+ * active/inactive, old/new queues
+ */
+#define ZT_QOS_MAX_ENQUEUED_PACKETS 1024
+
+/**
+ * Number of QoS queues (buckets)
+ */
+#define ZT_QOS_NUM_BUCKETS 9
+
+/**
+ * All unspecified traffic is put in this bucket. Anything in a bucket with a smaller
+ * value is de-prioritized. Anything in a bucket with a higher value is prioritized over
+ * other traffic.
+ */
+#define ZT_QOS_DEFAULT_BUCKET 0
+
+/**
  * How frequently to send heartbeats over in-use paths
  */
 #define ZT_PATH_HEARTBEAT_PERIOD 14000
-
-/**
- * Paths are considered inactive if they have not received traffic in this long
- */
-#define ZT_PATH_ALIVE_TIMEOUT 45000
-
-/**
- * Minimum time between attempts to check dead paths to see if they can be re-awakened
- */
-#define ZT_PATH_MIN_REACTIVATE_INTERVAL 2500
 
 /**
  * Do not accept HELLOs over a given path more often than this
@@ -289,14 +460,19 @@
 #define ZT_PEER_PING_PERIOD 60000
 
 /**
+ * Delay between full-fledge pings of directly connected peers.
+ * 
+ * With multipath bonding enabled ping peers more often to measure
+ * packet loss and latency. This uses more bandwidth so is disabled
+ * by default to avoid increasing idle bandwidth use for regular
+ * links.
+ */
+#define ZT_MULTIPATH_PEER_PING_PERIOD 5000
+
+/**
  * Paths are considered expired if they have not sent us a real packet in this long
  */
 #define ZT_PEER_PATH_EXPIRATION ((ZT_PEER_PING_PERIOD * 4) + 3000)
-
-/**
- * Send a full HELLO every this often (ms)
- */
-#define ZT_PEER_SEND_FULL_HELLO_EVERY (ZT_PEER_PING_PERIOD * 2)
 
 /**
  * How often to retry expired paths that we're still remembering
@@ -306,7 +482,11 @@
 /**
  * Timeout for overall peer activity (measured from last receive)
  */
+#ifndef ZT_SDK
 #define ZT_PEER_ACTIVITY_TIMEOUT 500000
+#else
+#define ZT_PEER_ACTIVITY_TIMEOUT 30000
+#endif
 
 /**
  * General rate limit timeout for multiple packet types (HELLO, etc.)
@@ -352,19 +532,24 @@
 #define ZT_MAX_BRIDGE_ROUTES 67108864
 
 /**
- * If there is no known route, spam to up to this many active bridges
+ * If there is no known L2 bridging route, spam to up to this many active bridges
  */
 #define ZT_MAX_BRIDGE_SPAM 32
 
 /**
  * Interval between direct path pushes in milliseconds
  */
-#define ZT_DIRECT_PATH_PUSH_INTERVAL 120000
+#define ZT_DIRECT_PATH_PUSH_INTERVAL 15000
+
+/**
+ * Interval between direct path pushes in milliseconds if we already have a path
+ */
+#define ZT_DIRECT_PATH_PUSH_INTERVAL_HAVEPATH 120000
 
 /**
  * Time horizon for push direct paths cutoff
  */
-#define ZT_PUSH_DIRECT_PATHS_CUTOFF_TIME 60000
+#define ZT_PUSH_DIRECT_PATHS_CUTOFF_TIME 30000
 
 /**
  * Maximum number of direct path pushes within cutoff time
@@ -373,12 +558,12 @@
  * per CUTOFF_TIME milliseconds per peer to prevent this from being
  * useful for DOS amplification attacks.
  */
-#define ZT_PUSH_DIRECT_PATHS_CUTOFF_LIMIT 5
+#define ZT_PUSH_DIRECT_PATHS_CUTOFF_LIMIT 8
 
 /**
  * Maximum number of paths per IP scope (e.g. global, link-local) and family (e.g. v4/v6)
  */
-#define ZT_PUSH_DIRECT_PATHS_MAX_PER_SCOPE_AND_FAMILY 4
+#define ZT_PUSH_DIRECT_PATHS_MAX_PER_SCOPE_AND_FAMILY 8
 
 /**
  * Time horizon for VERB_NETWORK_CREDENTIALS cutoff
@@ -444,14 +629,14 @@
  */
 #define ZT_THREAD_MIN_STACK_SIZE 1048576
 
-/* Ethernet frame types that might be relevant to us */
-#define ZT_ETHERTYPE_IPV4 0x0800
-#define ZT_ETHERTYPE_ARP 0x0806
-#define ZT_ETHERTYPE_RARP 0x8035
-#define ZT_ETHERTYPE_ATALK 0x809b
-#define ZT_ETHERTYPE_AARP 0x80f3
-#define ZT_ETHERTYPE_IPX_A 0x8137
-#define ZT_ETHERTYPE_IPX_B 0x8138
-#define ZT_ETHERTYPE_IPV6 0x86dd
+// Exceptions thrown in core ZT code
+#define ZT_EXCEPTION_OUT_OF_BOUNDS 100
+#define ZT_EXCEPTION_OUT_OF_MEMORY 101
+#define ZT_EXCEPTION_PRIVATE_KEY_REQUIRED 102
+#define ZT_EXCEPTION_INVALID_ARGUMENT 103
+#define ZT_EXCEPTION_INVALID_SERIALIZED_DATA_INVALID_TYPE 200
+#define ZT_EXCEPTION_INVALID_SERIALIZED_DATA_OVERFLOW 201
+#define ZT_EXCEPTION_INVALID_SERIALIZED_DATA_INVALID_CRYPTOGRAPHIC_TOKEN 202
+#define ZT_EXCEPTION_INVALID_SERIALIZED_DATA_BAD_ENCODING 203
 
 #endif

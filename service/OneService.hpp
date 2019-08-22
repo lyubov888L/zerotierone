@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_ONESERVICE_HPP
@@ -22,9 +30,17 @@
 #include <string>
 #include <vector>
 
-#include "../node/InetAddress.hpp"
-
 namespace ZeroTier {
+
+#ifdef ZT_SDK
+class VirtualTap;
+// Use the virtual libzt endpoint instead of a tun/tap port driver
+namespace ZeroTier { typedef VirtualTap EthernetTap; }
+#endif
+
+// Forward declaration so we can avoid dragging everything in
+struct InetAddress;
+class Node;
 
 /**
  * Local service for ZeroTier One as system VPN/NFV provider
@@ -130,6 +146,21 @@ public:
 	 * @return System device name corresponding with a given ZeroTier network ID or empty string if not opened yet or network ID not found
 	 */
 	virtual std::string portDeviceName(uint64_t nwid) const = 0;
+
+#ifdef ZT_SDK
+	/**
+	 * Whether we allow access to the service via local HTTP requests (disabled by default in libzt)
+	 */
+	bool allowHttpBackplaneManagement = false;
+	/**
+	 * @return Reference to the Node
+	 */
+	virtual Node * getNode() = 0;
+	/**
+	 * Fills out a structure with network-specific route information
+	 */
+	virtual void getRoutes(uint64_t nwid, void *routeArray, unsigned int *numRoutes) = 0;
+#endif
 
 	/**
 	 * Terminate background service (can be called from other threads)

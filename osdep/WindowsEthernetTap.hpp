@@ -1,6 +1,6 @@
 /*
  * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2016  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (C) 2011-2019  ZeroTier, Inc.  https://www.zerotier.com/
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * --
+ *
+ * You can be released from the requirements of the license by purchasing
+ * a commercial license. Buying such a license is mandatory as soon as you
+ * develop commercial closed-source software that incorporates or links
+ * directly against ZeroTier software without disclosing the source code
+ * of your own application.
  */
 
 #ifndef ZT_WINDOWSETHERNETTAP_HPP
@@ -30,14 +38,14 @@
 
 #include "../node/Constants.hpp"
 #include "../node/Mutex.hpp"
-#include "../node/Array.hpp"
 #include "../node/MulticastGroup.hpp"
 #include "../node/InetAddress.hpp"
 #include "../osdep/Thread.hpp"
+#include "EthernetTap.hpp"
 
 namespace ZeroTier {
 
-class WindowsEthernetTap
+class WindowsEthernetTap : public EthernetTap
 {
 public:
 	/**
@@ -64,7 +72,7 @@ public:
 	static std::string destroyAllPersistentTapDevices();
 
 	/**
-	 * Uninstall a specific persistent tap device by instance ID
+	 * Uninstalls a specific persistent tap device by instance ID
 	 *
 	 * @param instanceId Device instance ID
 	 * @return Empty string on success, otherwise an error message
@@ -90,17 +98,18 @@ public:
 		void (*handler)(void *,void *,uint64_t,const MAC &,const MAC &,unsigned int,unsigned int,const void *,unsigned int),
 		void *arg);
 
-	~WindowsEthernetTap();
+	virtual ~WindowsEthernetTap();
 
-	void setEnabled(bool en);
-	bool enabled() const;
-	bool addIp(const InetAddress &ip);
-	bool removeIp(const InetAddress &ip);
-	std::vector<InetAddress> ips() const;
-	void put(const MAC &from,const MAC &to,unsigned int etherType,const void *data,unsigned int len);
-	std::string deviceName() const;
-	void setFriendlyName(const char *friendlyName);
-	void scanMulticastGroups(std::vector<MulticastGroup> &added,std::vector<MulticastGroup> &removed);
+	virtual void setEnabled(bool en);
+	virtual bool enabled() const;
+	virtual bool addIp(const InetAddress &ip);
+	virtual bool removeIp(const InetAddress &ip);
+	virtual std::vector<InetAddress> ips() const;
+	virtual void put(const MAC &from,const MAC &to,unsigned int etherType,const void *data,unsigned int len);
+	virtual std::string deviceName() const;
+	virtual void setFriendlyName(const char *friendlyName);
+	virtual void scanMulticastGroups(std::vector<MulticastGroup> &added,std::vector<MulticastGroup> &removed);
+	virtual void setMtu(unsigned int mtu);
 
 	inline const NET_LUID &luid() const { return _deviceLuid; }
 	inline const GUID &guid() const { return _deviceGuid; }
@@ -110,7 +119,7 @@ public:
 	void threadMain()
 		throw();
 
-    bool isInitialized() const { return _initialized; };
+	bool isInitialized() const { return _initialized; };
 
 private:
 	NET_IFINDEX _getDeviceIndex(); // throws on failure
@@ -122,6 +131,7 @@ private:
 	void *_arg;
 	MAC _mac;
 	uint64_t _nwid;
+	volatile unsigned int _mtu;
 	Thread _thread;
 
 	volatile HANDLE _tap;
@@ -131,13 +141,21 @@ private:
 	NET_LUID _deviceLuid;
 	std::string _netCfgInstanceId;
 	std::string _deviceInstanceId;
+	std::string _mySubkeyName;
+
+	std::string _friendlyName;
 
 	std::vector<InetAddress> _assignedIps; // IPs assigned with addIp
 	Mutex _assignedIps_m;
 
 	std::vector<MulticastGroup> _multicastGroups;
 
-	std::queue< std::pair< Array<char,ZT_IF_MTU + 32>,unsigned int > > _injectPending;
+	struct _InjectPending
+	{
+		unsigned int len;
+		char data[ZT_MAX_MTU + 32];
+	};
+	std::queue<_InjectPending> _injectPending;
 	Mutex _injectPending_m;
 
 	std::string _pathToHelpers;
